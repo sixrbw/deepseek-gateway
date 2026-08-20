@@ -24,7 +24,7 @@ RUN go mod download
 COPY . .
 
 # 将前端构建产物复制到内嵌目录
-COPY --from=web-builder /app/web/dist ./internal/static/dist
+COPY --from=web-builder /app/web/dist ./internal/infra/static/dist
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o modelgate ./cmd/server
 # 生产镜像
