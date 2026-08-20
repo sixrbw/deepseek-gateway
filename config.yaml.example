@@ -110,11 +110,11 @@ quota_policies:
     rate_limit: 60              # 每分钟请求数限制
     rate_limit_window: 60       # 速率限制窗口（秒）
     request_quota_daily: 500    # 每日请求配额
-    available_time_ranges:      # 可用时间段（不配置或空列表表示全天可用）
-      - start: "00:00"
-        end: "10:00"
-      - start: "18:00"
-        end: "24:00"
+available_time_ranges:
+  - start: "00:00"
+    end: "10:00"
+  - start: "18:00"
+    end: "23:59"
     models:
       - "glm4.7"
       - "kimi2.5"
