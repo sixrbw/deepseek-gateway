@@ -47,62 +47,67 @@ func (a *StringArray) Scan(value interface{}) error {
 }
 
 type User struct {
-	ID           uuid.UUID  `json:"id"`
-	Email        string     `json:"email"`
-	PasswordHash string     `json:"-"`
-	Name         string     `json:"name"`
-	Role         Role       `json:"role"`
-	Department   string     `json:"department"`
-	QuotaPolicy  string     `json:"quota_policy"`
-	AuthSource   string     `json:"auth_source"` // local, sso
-	Enabled      bool       `json:"enabled"`
-	CreatedAt    time.Time  `json:"created_at"`
-	UpdatedAt    time.Time  `json:"updated_at"`
-	LastLoginAt  *time.Time `json:"last_login_at,omitempty"`
+	ID            uuid.UUID   `json:"id"`
+	Email         string      `json:"email"`
+	PasswordHash  string      `json:"-"`
+	Name          string      `json:"name"`
+	Role          Role        `json:"role"`
+	Department    string      `json:"department"`
+	QuotaPolicy   string      `json:"quota_policy"`
+	QuotaPolicies StringArray `json:"quota_policies"`
+	AuthSource    string      `json:"auth_source"` // local, sso
+	Enabled       bool        `json:"enabled"`
+	CreatedAt     time.Time   `json:"created_at"`
+	UpdatedAt     time.Time   `json:"updated_at"`
+	LastLoginAt   *time.Time  `json:"last_login_at,omitempty"`
 }
 
 type UserCreateRequest struct {
-	Email       string `json:"email" binding:"required,email"`
-	Password    string `json:"password" binding:"required,min=6"`
-	Name        string `json:"name" binding:"required"`
-	Role        Role   `json:"role"`
-	Department  string `json:"department"`
-	QuotaPolicy string `json:"quota_policy"`
+	Email         string   `json:"email" binding:"required,email"`
+	Password      string   `json:"password" binding:"required,min=6"`
+	Name          string   `json:"name" binding:"required"`
+	Role          Role     `json:"role"`
+	Department    string   `json:"department"`
+	QuotaPolicy   string   `json:"quota_policy"`
+	QuotaPolicies []string `json:"quota_policies"`
 }
 
 type UserUpdateRequest struct {
-	Name        string `json:"name"`
-	Role        Role   `json:"role"`
-	Department  string `json:"department"`
-	QuotaPolicy string `json:"quota_policy"`
-	Enabled     *bool  `json:"enabled"`
+	Name          string   `json:"name"`
+	Role          Role     `json:"role"`
+	Department    string   `json:"department"`
+	QuotaPolicy   string   `json:"quota_policy"`
+	QuotaPolicies []string `json:"quota_policies"`
+	Enabled       *bool    `json:"enabled"`
 }
 
 type UserResponse struct {
-	ID          uuid.UUID  `json:"id"`
-	Email       string     `json:"email"`
-	Name        string     `json:"name"`
-	Role        Role       `json:"role"`
-	Department  string     `json:"department"`
-	QuotaPolicy string     `json:"quota_policy"`
-	AuthSource  string     `json:"auth_source"`
-	Enabled     bool       `json:"enabled"`
-	CreatedAt   time.Time  `json:"created_at"`
-	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	ID            uuid.UUID  `json:"id"`
+	Email         string     `json:"email"`
+	Name          string     `json:"name"`
+	Role          Role       `json:"role"`
+	Department    string     `json:"department"`
+	QuotaPolicy   string     `json:"quota_policy"`
+	QuotaPolicies []string   `json:"quota_policies"`
+	AuthSource    string     `json:"auth_source"`
+	Enabled       bool       `json:"enabled"`
+	CreatedAt     time.Time  `json:"created_at"`
+	LastLoginAt   *time.Time `json:"last_login_at,omitempty"`
 }
 
 func (u *User) ToResponse() UserResponse {
 	return UserResponse{
-		ID:          u.ID,
-		Email:       u.Email,
-		Name:        u.Name,
-		Role:        u.Role,
-		Department:  u.Department,
-		QuotaPolicy: u.QuotaPolicy,
-		AuthSource:  u.AuthSource,
-		Enabled:     u.Enabled,
-		CreatedAt:   u.CreatedAt,
-		LastLoginAt: u.LastLoginAt,
+		ID:            u.ID,
+		Email:         u.Email,
+		Name:          u.Name,
+		Role:          u.Role,
+		Department:    u.Department,
+		QuotaPolicy:   u.QuotaPolicy,
+		QuotaPolicies: []string(u.QuotaPolicies),
+		AuthSource:    u.AuthSource,
+		Enabled:       u.Enabled,
+		CreatedAt:     u.CreatedAt,
+		LastLoginAt:   u.LastLoginAt,
 	}
 }
 
@@ -124,7 +129,7 @@ func scanUser(s scanner) (*User, error) {
 	user := &User{}
 	err := s.Scan(
 		&user.ID, &user.Email, &user.PasswordHash, &user.Name, &user.Role,
-		&user.Department, &user.QuotaPolicy, &user.AuthSource, &user.Enabled,
+		&user.Department, &user.QuotaPolicy, &user.QuotaPolicies, &user.AuthSource, &user.Enabled,
 		&user.CreatedAt, &user.UpdatedAt, &user.LastLoginAt,
 	)
 	return user, err
@@ -136,19 +141,19 @@ func (s *UserStore) Create(user *User) error {
 		user.AuthSource = "local"
 	}
 	query := `
-		INSERT INTO users (id, email, password_hash, name, role, department, quota_policy, auth_source, enabled)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO users (id, email, password_hash, name, role, department, quota_policy, quota_policies, auth_source, enabled)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		RETURNING created_at, updated_at`
 
 	return s.db.QueryRow(query,
 		user.ID.String(), user.Email, user.PasswordHash, user.Name, user.Role, user.Department,
-		user.QuotaPolicy, user.AuthSource, user.Enabled,
+		user.QuotaPolicy, user.QuotaPolicies, user.AuthSource, user.Enabled,
 	).Scan(&user.CreatedAt, &user.UpdatedAt)
 }
 
 func (s *UserStore) GetByID(id uuid.UUID) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, name, role, department, quota_policy,
+		SELECT id, email, password_hash, name, role, department, quota_policy, quota_policies,
 		       auth_source, enabled, created_at, updated_at, last_login_at
 		FROM users WHERE id = ?`
 
@@ -164,7 +169,7 @@ func (s *UserStore) GetByID(id uuid.UUID) (*User, error) {
 
 func (s *UserStore) GetByEmail(email string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, name, role, department, quota_policy,
+		SELECT id, email, password_hash, name, role, department, quota_policy, quota_policies,
 		       auth_source, enabled, created_at, updated_at, last_login_at
 		FROM users WHERE email = ? AND enabled = 1`
 
@@ -181,7 +186,7 @@ func (s *UserStore) GetByEmail(email string) (*User, error) {
 // GetByEmailAll 查询用户（不过滤 enabled 状态），用于注册时检测邮箱是否已被占用
 func (s *UserStore) GetByEmailAll(email string) (*User, error) {
 	query := `
-		SELECT id, email, password_hash, name, role, department, quota_policy,
+		SELECT id, email, password_hash, name, role, department, quota_policy, quota_policies,
 		       auth_source, enabled, created_at, updated_at, last_login_at
 		FROM users WHERE email = ?`
 
@@ -197,7 +202,7 @@ func (s *UserStore) GetByEmailAll(email string) (*User, error) {
 
 func (s *UserStore) List(limit, offset int) ([]*User, error) {
 	query := `
-		SELECT id, email, password_hash, name, role, department, quota_policy,
+		SELECT id, email, password_hash, name, role, department, quota_policy, quota_policies,
 		       auth_source, enabled, created_at, updated_at, last_login_at
 		FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?`
 
@@ -242,7 +247,7 @@ func (s *UserStore) ListPaginated(limit, offset int, sortBy, sortOrder string) (
 	}
 
 	query := fmt.Sprintf(`
-		SELECT id, email, password_hash, name, role, department, quota_policy,
+		SELECT id, email, password_hash, name, role, department, quota_policy, quota_policies,
 		       auth_source, enabled, created_at, updated_at, last_login_at
 		FROM users ORDER BY %s %s LIMIT ? OFFSET ?`, col, order)
 
@@ -274,12 +279,12 @@ func (s *UserStore) Update(user *User) error {
 	query := `
 		UPDATE users SET
 			email = ?, name = ?, role = ?, department = ?,
-			quota_policy = ?, auth_source = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
+			quota_policy = ?, quota_policies = ?, auth_source = ?, enabled = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`
 
 	_, err := s.db.Exec(query,
 		user.Email, user.Name, user.Role, user.Department,
-		user.QuotaPolicy, user.AuthSource, user.Enabled, user.ID.String(),
+		user.QuotaPolicy, user.QuotaPolicies, user.AuthSource, user.Enabled, user.ID.String(),
 	)
 	return err
 }

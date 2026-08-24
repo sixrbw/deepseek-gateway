@@ -331,7 +331,16 @@ func (p *Proxy) authenticateAndCheckQuota(pctx *ProxyContext) bool {
 	pctx.User = user
 
 	// 检查配额
-	quotaResult, err := p.quotaService.CheckQuota(req.UserID, user.QuotaPolicy, req.ModelID)
+	policies := []string(user.QuotaPolicies)
+	if len(policies) == 0 {
+		if user.QuotaPolicy != "" {
+			policies = []string{user.QuotaPolicy}
+		} else {
+			policies = []string{"default"}
+		}
+	}
+
+	quotaResult, err := p.quotaService.CheckQuotaMulti(req.UserID, policies, req.ModelID)
 	if err != nil {
 		pctx.SendError(http.StatusInternalServerError, "api_error", "quota check failed")
 		return false
@@ -340,7 +349,7 @@ func (p *Proxy) authenticateAndCheckQuota(pctx *ProxyContext) bool {
 	// 当指定的模型不被允许时，降级使用默认模型重试
 	if !quotaResult.Allowed && quotaResult.Reason == "model not allowed" && quotaResult.DefaultModel != "" {
 		req.ModelID = quotaResult.DefaultModel
-		quotaResult, err = p.quotaService.CheckQuota(req.UserID, user.QuotaPolicy, req.ModelID)
+		quotaResult, err = p.quotaService.CheckQuotaMulti(req.UserID, policies, req.ModelID)
 		if err != nil {
 			pctx.SendError(http.StatusInternalServerError, "api_error", "quota check failed")
 			return false

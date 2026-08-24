@@ -61,7 +61,7 @@ const UserTab: React.FC = () => {
     setEditingUser(null);
     setUserModalTitle('创建用户');
     userForm.resetFields();
-    userForm.setFieldsValue({ enabled: true, role: 'user', quota_policy: 'default' });
+    userForm.setFieldsValue({ enabled: true, role: 'user', quota_policies: ['default'] });
     setUserModalVisible(true);
   };
 
@@ -74,7 +74,7 @@ const UserTab: React.FC = () => {
       name: user.name,
       role: user.role,
       department: user.department,
-      quota_policy: user.quota_policy,
+      quota_policies: user.quota_policies?.length ? user.quota_policies : (user.quota_policy ? [user.quota_policy] : ['default']),
       enabled: user.enabled,
     });
     setUserModalVisible(true);
@@ -112,7 +112,8 @@ const UserTab: React.FC = () => {
           name: values.name,
           role: values.role,
           department: values.department,
-          quota_policy: values.quota_policy,
+          quota_policy: values.quota_policies[0] || 'default',
+          quota_policies: values.quota_policies,
           enabled: values.enabled,
         });
         messageApi.success('用户更新成功');
@@ -124,7 +125,8 @@ const UserTab: React.FC = () => {
           name: values.name,
           role: values.role,
           department: values.department,
-          quota_policy: values.quota_policy,
+          quota_policy: values.quota_policies[0] || 'default',
+          quota_policies: values.quota_policies,
           enabled: values.enabled,
         });
         messageApi.success('用户创建成功');
@@ -144,9 +146,12 @@ const UserTab: React.FC = () => {
     { title: '部门', dataIndex: 'department' },
     {
       title: '配额策略',
-      dataIndex: 'quota_policy',
+      dataIndex: 'quota_policies',
       sorter: true,
-      render: (policy: string) => policy ? <Tag color="blue">{policy}</Tag> : '-',
+      render: (_: string[], record: User) => {
+        const policies = record.quota_policies?.length ? record.quota_policies : (record.quota_policy ? [record.quota_policy] : []);
+        return policies.length ? policies.map(p => <Tag key={p} color="blue">{p}</Tag>) : '-';
+      },
     },
     {
       title: '启用状态',
@@ -315,11 +320,12 @@ const UserTab: React.FC = () => {
           </Form.Item>
 
           <Form.Item
-            name="quota_policy"
+            name="quota_policies"
             label="配额策略"
-            rules={[{ required: true, message: '请选择配额策略' }]}
+            rules={[{ required: true, message: '请选择至少一个配额策略' }]}
+            extra="每个模型只能属于一个策略，含通配符(*)的策略不能与其他策略同时绑定"
           >
-            <Select placeholder="请选择配额策略">
+            <Select mode="multiple" placeholder="请选择配额策略">
               {policies.map(policy => (
                 <Select.Option key={policy.name} value={policy.name}>{policy.name}</Select.Option>
               ))}

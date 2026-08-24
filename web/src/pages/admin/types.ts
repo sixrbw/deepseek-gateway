@@ -45,6 +45,7 @@ export interface User {
   role: string;
   department: string;
   quota_policy: string;
+  quota_policies: string[];
   enabled: boolean;
   last_login_at?: string;
 }
@@ -96,6 +97,7 @@ export interface UserFormValues {
   role: string;
   department: string;
   quota_policy: string;
+  quota_policies: string[];
   enabled: boolean;
 }
 
