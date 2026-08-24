@@ -30,11 +30,13 @@ type APIKeyValidator interface {
 }
 
 const (
-	ContextKeyAPIKeyID = "api_key_id"
-	ContextKeyAuthType = "auth_type"
-	ContextKeyUserID   = "user_id"
-	AuthTypeAPIKey     = "api_key"
-	AuthTypeJWT        = "jwt"
+	ContextKeyAPIKeyID     = "api_key_id"
+	ContextKeyAPIKeyName   = "api_key_name"
+	ContextKeyAPIKeyPrefix = "api_key_prefix"
+	ContextKeyAuthType     = "auth_type"
+	ContextKeyUserID       = "user_id"
+	AuthTypeAPIKey         = "api_key"
+	AuthTypeJWT            = "jwt"
 )
 
 // ProxyAuthMiddleware 为大模型代理路由提供混合认证（支持 API Key 和 JWT）
@@ -68,6 +70,8 @@ func ProxyAuthMiddleware(
 		if err == nil {
 			// API Key 验证成功
 			c.Set(ContextKeyAPIKeyID, key.ID)
+			c.Set(ContextKeyAPIKeyName, key.Name)
+			c.Set(ContextKeyAPIKeyPrefix, key.KeyPrefix)
 			c.Set(ContextKeyUserID, key.UserID)
 			c.Set(ContextKeyAuthType, AuthTypeAPIKey)
 			c.Next()

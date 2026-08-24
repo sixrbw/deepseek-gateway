@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Button } from 'antd';
-import { SyncOutlined } from '@ant-design/icons';
+import { Button, message } from 'antd';
+import { SyncOutlined, DownloadOutlined } from '@ant-design/icons';
 import api from '../../api';
 import AccessLogsTable from '../../components/AccessLogsTable';
 
@@ -8,6 +8,7 @@ const AdminLogs: React.FC = () => {
   const [accessLogs, setAccessLogs] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -37,9 +38,39 @@ const AdminLogs: React.FC = () => {
     return map;
   }, [users]);
 
+  const handleExport = async () => {
+    setExporting(true);
+    try {
+      const response = await api.get('/api/v1/admin/access-logs/export', {
+        responseType: 'blob',
+      });
+      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', `token-logs-${dateStr}.zip`);
+      document.body.appendChild(link);
+      link.click();
+      link.parentNode?.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Export failed:', err);
+      message.error('导出失败，请稍后重试');
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return (
     <>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        <Button
+          icon={<DownloadOutlined />}
+          onClick={handleExport}
+          loading={exporting}
+        >
+          导出（按 Token）
+        </Button>
         <Button icon={<SyncOutlined />} onClick={fetchData} loading={loading}>
           刷新
         </Button>
