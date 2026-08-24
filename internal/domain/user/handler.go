@@ -46,6 +46,7 @@ type QuotaService interface {
 type QuotaStore interface {
 	GetRecentUsageRecords(userID uuid.UUID, days int) ([]map[string]interface{}, error)
 	GetDailyUsageList(userID uuid.UUID, startDate, endDate time.Time) ([]*entity.QuotaUsageDaily, error)
+	ValidatePoliciesNoConflict(policyNames []string) error
 }
 
 type UsageService interface {
@@ -190,13 +191,14 @@ func (h *Handler) createUserInternal(req entity.UserCreateRequest, enabled bool)
 	}
 
 	user := &entity.User{
-		Email:        req.Email,
-		PasswordHash: passwordHash,
-		Name:         req.Name,
-		Role:         req.Role,
-		Department:   req.Department,
-		QuotaPolicy:  req.QuotaPolicy,
-		Enabled:      enabled,
+		Email:         req.Email,
+		PasswordHash:  passwordHash,
+		Name:          req.Name,
+		Role:          req.Role,
+		Department:    req.Department,
+		QuotaPolicy:   req.QuotaPolicy,
+		QuotaPolicies: entity.StringArray(req.QuotaPolicies),
+		Enabled:       enabled,
 	}
 
 	if user.QuotaPolicy == "" {
@@ -315,6 +317,13 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
+	if len(req.QuotaPolicies) > 1 {
+		if err := h.quotaStore.ValidatePoliciesNoConflict(req.QuotaPolicies); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+	}
+
 	user, err := h.createUserInternal(req, true)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
@@ -358,6 +367,15 @@ func (h *Handler) Update(c *gin.Context) {
 	}
 	if req.QuotaPolicy != "" {
 		user.QuotaPolicy = req.QuotaPolicy
+	}
+	if req.QuotaPolicies != nil {
+		if len(req.QuotaPolicies) > 1 {
+			if err := h.quotaStore.ValidatePoliciesNoConflict(req.QuotaPolicies); err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+				return
+			}
+		}
+		user.QuotaPolicies = entity.StringArray(req.QuotaPolicies)
 	}
 	if req.Enabled != nil {
 		user.Enabled = *req.Enabled

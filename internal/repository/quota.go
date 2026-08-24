@@ -2,6 +2,7 @@ package entity
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -274,4 +275,42 @@ func (s *QuotaStore) GetRecentUsageRecords(userID uuid.UUID, days int) ([]map[st
 		})
 	}
 	return records, rows.Err()
+}
+
+// GetPolicyForModel 从多个策略名中找到第一个包含该 modelID 的策略
+func (s *QuotaStore) GetPolicyForModel(policyNames []string, modelID string) (*QuotaPolicy, error) {
+	for _, name := range policyNames {
+		policy, err := s.GetPolicy(name)
+		if err != nil || policy == nil {
+			continue
+		}
+		for _, m := range policy.Models {
+			if m == "*" || m == modelID {
+				return policy, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+// ValidatePoliciesNoConflict 校验多个策略的模型列表不冲突
+// 每个模型只能出现在一个策略里；包含 * 的策略不能与其他策略共存
+func (s *QuotaStore) ValidatePoliciesNoConflict(policyNames []string) error {
+	seen := map[string]string{}
+	for _, name := range policyNames {
+		policy, _ := s.GetPolicy(name)
+		if policy == nil {
+			continue
+		}
+		for _, m := range policy.Models {
+			if m == "*" {
+				return fmt.Errorf("策略 %s 包含通配符 *，不能与其他策略同时绑定给同一用户", name)
+			}
+			if prev, exists := seen[m]; exists {
+				return fmt.Errorf("模型 %s 在策略 %s 和 %s 中重复，每个模型只能属于一个策略", m, prev, name)
+			}
+			seen[m] = name
+		}
+	}
+	return nil
 }

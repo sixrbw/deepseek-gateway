@@ -426,3 +426,77 @@ func (s *Service) GetQuotaStats(userID uuid.UUID, policyName string) (map[string
 		"reset_time":           "00:00",
 	}, nil
 }
+
+// CheckQuotaMulti 多策略版本：从 policyNames 中找匹配 modelID 的策略执行配额检查
+// 如果没有匹配的策略，fallback 到名为 "default" 的策略
+func (s *Service) CheckQuotaMulti(userID uuid.UUID, policyNames []string, modelID string) (*entity.QuotaCheckResult, error) {
+	result := &entity.QuotaCheckResult{Allowed: true}
+
+	// 1. 找到匹配该模型的策略
+	policy, err := s.store.GetPolicyForModel(policyNames, modelID)
+	if err != nil {
+		return nil, err
+	}
+	// 2. 没找到匹配策略，fallback 到 "default"
+	if policy == nil {
+		policy, err = s.store.GetPolicy("default")
+		if err != nil {
+			return nil, err
+		}
+	}
+	if policy == nil {
+		return &entity.QuotaCheckResult{Allowed: false, Reason: "no matching policy found"}, nil
+	}
+
+	// 3. 检查模型权限
+	hasModelAccess := false
+	for _, m := range policy.Models {
+		if m == "*" || m == modelID {
+			hasModelAccess = true
+			break
+		}
+	}
+	result.DefaultModel = policy.DefaultModel
+	if !hasModelAccess {
+		result.Allowed = false
+		result.Reason = "model not allowed"
+		return result, nil
+	}
+
+	// 4. 检查可用时间段
+	if !isWithinAvailableTime(policy.AvailableTimeRanges, time.Now()) {
+		result.Allowed = false
+		result.Reason = "outside available time range"
+		return result, nil
+	}
+
+	// 5. 检查速率限制
+	current := s.rateCounter.GetCount(userID.String(), policy.RateLimitWindow)
+	if policy.RateLimit > 0 && current >= policy.RateLimit {
+		result.Allowed = false
+		result.Reason = "rate limit exceeded"
+		result.RateLimit = policy.RateLimit
+		result.RateRemaining = 0
+		result.RateLimitWindow = policy.RateLimitWindow
+		return result, nil
+	}
+	result.RateLimit = policy.RateLimit
+	result.RateRemaining = policy.RateLimit - current - 1
+	result.RateLimitWindow = policy.RateLimitWindow
+
+	// 6. 检查每日配额
+	today := time.Now()
+	dailyRequests, err := s.getDailyRequestCountWithCache(userID, today)
+	if err != nil {
+		return nil, err
+	}
+	result.DailyRequests = dailyRequests
+	result.DailyRequestLimit = policy.RequestQuotaDaily
+	if policy.RequestQuotaDaily > 0 && dailyRequests >= policy.RequestQuotaDaily {
+		result.Allowed = false
+		result.Reason = "daily request quota exceeded"
+		return result, nil
+	}
+
+	return result, nil
+}
