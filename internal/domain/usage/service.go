@@ -15,6 +15,9 @@ import (
 // AccessLog 访问日志结构
 type AccessLog struct {
 	UserID          uuid.UUID         `json:"user_id"`
+	APIKeyID        uuid.UUID         `json:"api_key_id"`        // API Key ID（若通过 API Key 认证）
+	APIKeyName      string            `json:"api_key_name"`      // API Key 名称
+	APIKeyPrefix    string            `json:"api_key_prefix"`    // API Key 前缀
 	Method          string            `json:"method"`           // GET/POST/PUT/DELETE
 	Path            string            `json:"path"`             // 访问路径
 	ClientIP        string            `json:"client_ip"`        // 客户端IP
@@ -151,12 +154,15 @@ func (s *Service) Flush() {
 
 // RecordAccess 记录用户访问日志
 func (s *Service) RecordAccess(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, durationMs int64) {
-	s.RecordAccessDetailed(userID, method, path, clientIP, userAgent, modelName, statusCode, requestBytes, responseBytes, nil, "", nil, "", 0, 0, durationMs)
+	s.RecordAccessDetailed(userID, uuid.Nil, "", "", method, path, clientIP, userAgent, modelName, statusCode, requestBytes, responseBytes, nil, "", nil, "", 0, 0, durationMs)
 }
 
 // RecordAccessDetailed 记录用户访问日志（包含详细信息）
 func (s *Service) RecordAccessDetailed(
 	userID uuid.UUID,
+	apiKeyID uuid.UUID,
+	apiKeyName string,
+	apiKeyPrefix string,
 	method, path, clientIP, userAgent string, modelName string,
 	statusCode int,
 	requestBytes, responseBytes int64,
@@ -181,6 +187,9 @@ func (s *Service) RecordAccessDetailed(
 	// 创建访问日志条目（截断大内容）
 	log := AccessLog{
 		UserID:          userID,
+		APIKeyID:        apiKeyID,
+		APIKeyName:      apiKeyName,
+		APIKeyPrefix:    apiKeyPrefix,
 		Method:          method,
 		Path:            path,
 		ClientIP:        clientIP,

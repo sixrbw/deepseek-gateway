@@ -1,13 +1,17 @@
 package user
 
 import (
+	"archive/zip"
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -134,6 +138,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 
 		// /admin/access-logs
 		admin.GET("/access-logs", h.GetAllAccessLogs)
+		admin.GET("/access-logs/export", h.ExportAccessLogsByToken)
 	}
 }
 
@@ -816,4 +821,94 @@ func (h *Handler) UpdateSystemConfig(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "success", "data": req})
+}
+
+// sanitizeFilename 清理文件名，移除非法字符
+var unsafeChars = regexp.MustCompile(`[^a-zA-Z0-9\-_.]`)
+
+func sanitizeFilename(name string) string {
+	name = strings.TrimSpace(name)
+	name = unsafeChars.ReplaceAllString(name, "_")
+	if len(name) > 64 {
+		name = name[:64]
+	}
+	if name == "" {
+		name = "unknown"
+	}
+	return name
+}
+
+// ExportAccessLogsByToken 导出日志按 API Token 分组，打包为 zip 文件
+func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
+	logs := h.usageService.GetAllRecentAccess(0) // 0 = no limit
+
+	// 以 APIKey 前缀（有则用前缀，无则用 ID，否则归 unknown_token）为 key 分组
+	groups := make(map[string][]usage.AccessLog)
+	for _, log := range logs {
+		var key string
+		if log.APIKeyPrefix != "" {
+			key = sanitizeFilename(log.APIKeyPrefix)
+		} else if log.APIKeyName != "" {
+			key = sanitizeFilename(log.APIKeyName)
+		} else if log.APIKeyID != uuid.Nil {
+			key = sanitizeFilename(log.APIKeyID.String())
+		} else {
+			key = "unknown_token"
+		}
+		groups[key] = append(groups[key], log)
+	}
+
+	dateStr := time.Now().Format("20060102")
+	filename := fmt.Sprintf("token-logs-%s.zip", dateStr)
+
+	c.Header("Content-Type", "application/zip")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+
+	zw := zip.NewWriter(c.Writer)
+	defer zw.Close()
+
+	csvHeader := []string{
+		"time", "user_id", "api_key_prefix", "api_key_name",
+		"model", "method", "path", "client_ip",
+		"input_tokens", "output_tokens", "total_tokens",
+		"status_code", "duration_ms",
+		"request_bytes", "response_bytes",
+	}
+
+	for tokenKey, tokenLogs := range groups {
+		fw, err := zw.Create(tokenKey + ".csv")
+		if err != nil {
+			continue
+		}
+
+		var buf bytes.Buffer
+		cw := csv.NewWriter(&buf)
+
+		_ = cw.Write(csvHeader)
+
+		for _, l := range tokenLogs {
+			totalTokens := l.InputTokens + l.OutputTokens
+			record := []string{
+				l.Timestamp.Format(time.RFC3339),
+				l.UserID.String(),
+				l.APIKeyPrefix,
+				l.APIKeyName,
+				l.ModelName,
+				l.Method,
+				l.Path,
+				l.ClientIP,
+				strconv.Itoa(l.InputTokens),
+				strconv.Itoa(l.OutputTokens),
+				strconv.Itoa(totalTokens),
+				strconv.Itoa(l.StatusCode),
+				strconv.FormatInt(l.DurationMs, 10),
+				strconv.FormatInt(l.RequestBytes, 10),
+				strconv.FormatInt(l.ResponseBytes, 10),
+			}
+			_ = cw.Write(record)
+		}
+		cw.Flush()
+
+		_, _ = fw.Write(buf.Bytes())
+	}
 }

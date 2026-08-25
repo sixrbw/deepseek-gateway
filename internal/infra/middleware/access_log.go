@@ -81,7 +81,7 @@ func (r *responseRecorder) WriteHeader(code int) {
 // UsageRecorder 访问日志记录器接口
 type UsageRecorder interface {
 	RecordAccess(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, durationMs int64)
-	RecordAccessDetailed(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, requestHeaders map[string]string, requestBody string, responseHeaders map[string]string, responseBody string, inputTokens int, outputTokens int, durationMs int64)
+	RecordAccessDetailed(userID uuid.UUID, apiKeyID uuid.UUID, apiKeyName string, apiKeyPrefix string, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, requestHeaders map[string]string, requestBody string, responseHeaders map[string]string, responseBody string, inputTokens int, outputTokens int, durationMs int64)
 }
 
 // AccessLogMiddleware 访问日志记录中间件
@@ -194,8 +194,27 @@ func AccessLogMiddleware(usageService UsageRecorder) gin.HandlerFunc {
 				modelName, _ = mName.(string)
 			}
 
+			// 读取 API Key 信息
+			var apiKeyID uuid.UUID
+			if akid, exists := c.Get(ContextKeyAPIKeyID); exists {
+				if id, ok := akid.(uuid.UUID); ok {
+					apiKeyID = id
+				}
+			}
+			apiKeyName := ""
+			if akName, exists := c.Get(ContextKeyAPIKeyName); exists {
+				apiKeyName, _ = akName.(string)
+			}
+			apiKeyPrefix := ""
+			if akPrefix, exists := c.Get(ContextKeyAPIKeyPrefix); exists {
+				apiKeyPrefix, _ = akPrefix.(string)
+			}
+
 			go usageService.RecordAccessDetailed(
 				userID,
+				apiKeyID,
+				apiKeyName,
+				apiKeyPrefix,
 				method,
 				path,
 				clientIP,
