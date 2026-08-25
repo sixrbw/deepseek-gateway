@@ -1,4 +1,4 @@
-# 模界（Model Gate）配置文件示例
+# Modelgate 配置文件示例
 # 复制此文件为 config.yaml 并根据实际情况修改
 
 server:

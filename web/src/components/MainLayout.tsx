@@ -196,7 +196,7 @@ const MainLayout: React.FC = () => {
           justifyContent: 'center',
           borderBottom: '1px solid #f0f0f0',
         }}>
-          <img src={logo} alt="Model Gate" style={{ height: 55 }} />
+          <img src={logo} alt="Modelgate" style={{ height: 55 }} />
         </div>
 
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'auto' }}>
@@ -247,7 +247,7 @@ const MainLayout: React.FC = () => {
               backgroundClip: 'text',
               letterSpacing: '0.5px',
             }}>
-              让 AI 触手可及，使能工作效率倍增新时代
+              Modelgate
             </div>            
           </div>
 
