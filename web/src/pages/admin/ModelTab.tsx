@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, Tag, message, Modal, Form, Input, Space, Popconfirm, Tooltip, Switch, Drawer, InputNumber } from 'antd';
+import { Table, Button, Tag, message, Modal, Form, Input, Space, Popconfirm, Tooltip, Switch, Drawer, InputNumber, Select } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined, SettingOutlined, ReloadOutlined, CheckCircleOutlined, CloseCircleOutlined, ArrowLeftOutlined } from '@ant-design/icons';
 import api from '../../api';
 import type { Model, Backend, ModelFormValues, BackendFormValues } from './types';
@@ -26,6 +26,8 @@ const ModelTab: React.FC = () => {
   const [selectedModelName, setSelectedModelName] = useState<string>('');
   const [modelBackends, setModelBackends] = useState<Backend[]>([]);
   const [backendsLoading, setBackendsLoading] = useState(false);
+  const [selectedBackendIds, setSelectedBackendIds] = useState<string[]>([]);
+  const [sourceFilter, setSourceFilter] = useState<string | undefined>(undefined);
 
   // Backend modal states
   const [backendModalVisible, setBackendModalVisible] = useState(false);
@@ -64,7 +66,7 @@ const ModelTab: React.FC = () => {
   }, []);
 
   // Model management functions
-  const handleImportGatewaySubmit = async (values: { prefix: string; base_url: string; api_key?: string }) => {
+  const handleImportGatewaySubmit = async (values: { prefix: string; base_url: string; api_key?: string; source_platform: string; source_group?: string }) => {
     setImportLoading(true);
     try {
       const res = await api.post('/api/v1/admin/models/import', values);
@@ -186,6 +188,8 @@ const ModelTab: React.FC = () => {
   const handleManageBackends = async (modelId: string, modelName: string) => {
     setSelectedModelId(modelId);
     setSelectedModelName(modelName);
+    setSelectedBackendIds([]);
+    setSourceFilter(undefined);
     setBackendDrawerVisible(true);
     await fetchModelBackends(modelId);
   };
@@ -195,6 +199,7 @@ const ModelTab: React.FC = () => {
     try {
       const res = await api.get(`/api/v1/admin/models/${encodeURIComponent(modelId)}/backends`);
       setModelBackends(res.data.data || []);
+      setSelectedBackendIds([]);
     } catch {
       messageApi.error('获取后端列表失败');
     } finally {
@@ -207,6 +212,8 @@ const ModelTab: React.FC = () => {
     setSelectedModelId(null);
     setSelectedModelName('');
     setModelBackends([]);
+    setSelectedBackendIds([]);
+    setSourceFilter(undefined);
   };
 
   const generateBackendId = () => {
@@ -234,6 +241,8 @@ const ModelTab: React.FC = () => {
       id: backend.id,
       base_url: backend.base_url,
       model_name: backend.model_name,
+      source_platform: backend.source_platform,
+      source_group: backend.source_group,
       weight: backend.weight,
       enabled: backend.enabled,
       max_concurrency: backend.max_concurrency ?? 0,
@@ -287,6 +296,32 @@ const ModelTab: React.FC = () => {
       messageApi.error(error.response?.data?.error || '操作失败');
     }
   };
+
+  const handleBatchDeleteBackends = async () => {
+    if (!selectedModelId || selectedBackendIds.length === 0) return;
+    try {
+      const response = await api.post(`/api/v1/admin/models/${encodeURIComponent(selectedModelId)}/backends/batch-delete`, {
+        backend_ids: selectedBackendIds,
+      });
+      messageApi.success(response.data.message || '批量删除成功');
+      setSelectedBackendIds([]);
+      fetchModelBackends(selectedModelId);
+      fetchData();
+    } catch (err: unknown) {
+      const error = err as { response?: { data?: { error?: string } } };
+      messageApi.error(error.response?.data?.error || '批量删除失败');
+    }
+  };
+
+  const importedBackends = modelBackends.filter((backend) => Boolean(backend.source_platform));
+  const sourceOptions = Array.from(
+    new Set(
+      importedBackends.map((backend) => backend.source_group || backend.source_platform).filter(Boolean)
+    )
+  ).map((value) => ({ label: value as string, value: value as string }));
+  const filteredModelBackends = sourceFilter
+    ? modelBackends.filter((backend) => (backend.source_group || backend.source_platform) === sourceFilter)
+    : modelBackends;
 
   const modelColumns = [
     { title: 'ID', dataIndex: 'id', ellipsis: true },
@@ -368,6 +403,22 @@ const ModelTab: React.FC = () => {
       ellipsis: true,
       width: 150,
       render: (name: string) => name || '-',
+    },
+    {
+      title: '来源平台',
+      dataIndex: 'source_platform',
+      key: 'source_platform',
+      width: 140,
+      render: (sourcePlatform?: string) => sourcePlatform ? <Tag color="geekblue">{sourcePlatform}</Tag> : '-',
+    },
+    {
+      title: '来源分组',
+      dataIndex: 'source_group',
+      key: 'source_group',
+      width: 140,
+      render: (sourceGroup: string | undefined, record: Backend) => (sourceGroup || record.source_platform)
+        ? <Tag color="cyan">{sourceGroup || record.source_platform}</Tag>
+        : '-',
     },
     {
       title: '权重',
@@ -508,6 +559,30 @@ const ModelTab: React.FC = () => {
             </p>
           </div>
           <Space>
+            <Select
+              allowClear
+              placeholder="按来源分组筛选"
+              style={{ width: 220 }}
+              value={sourceFilter}
+              onChange={(value) => {
+                setSourceFilter(value);
+                setSelectedBackendIds([]);
+              }}
+              options={sourceOptions}
+            />
+            <Popconfirm
+              title="确认批量删除"
+              description={`将删除已选中的 ${selectedBackendIds.length} 个已导入后端实例，确定继续吗？`}
+              onConfirm={handleBatchDeleteBackends}
+              okText="删除"
+              cancelText="取消"
+              okButtonProps={{ danger: true }}
+              disabled={selectedBackendIds.length === 0}
+            >
+              <Button danger disabled={selectedBackendIds.length === 0}>
+                批量删除已导入项
+              </Button>
+            </Popconfirm>
             <Button
               icon={<ReloadOutlined />}
               onClick={() => selectedModelId && fetchModelBackends(selectedModelId)}
@@ -524,10 +599,17 @@ const ModelTab: React.FC = () => {
           </Space>
         </div>
         <Table
-          dataSource={modelBackends}
+          dataSource={filteredModelBackends}
           columns={backendColumns}
           rowKey="id"
           loading={backendsLoading}
+          rowSelection={{
+            selectedRowKeys: selectedBackendIds,
+            onChange: (keys) => setSelectedBackendIds(keys as string[]),
+            getCheckboxProps: (record: Backend) => ({
+              disabled: !record.source_platform,
+            }),
+          }}
         />
       </Drawer>
 
@@ -583,6 +665,22 @@ const ModelTab: React.FC = () => {
             extra="后端实际的模型名称（可选），不填则使用模型ID"
           >
             <Input placeholder="如：gpt-4-turbo" />
+          </Form.Item>
+
+          <Form.Item
+            name="source_platform"
+            label="来源平台"
+            extra="用于标记该后端来自哪个平台（可选）"
+          >
+            <Input placeholder="如：openai, azure, google" />
+          </Form.Item>
+
+          <Form.Item
+            name="source_group"
+            label="来源分组"
+            extra="用于同平台导入后端归组展示（可选）"
+          >
+            <Input placeholder="如：openai-prod" />
           </Form.Item>
 
           <Form.Item
@@ -753,6 +851,25 @@ const ModelTab: React.FC = () => {
             extra="用于生成后端ID（格式：前缀-模型名-序号），例如：google"
           >
             <Input placeholder="输入服务提供商前缀，如 google, azure, openai" />
+          </Form.Item>
+
+          <Form.Item
+            name="source_platform"
+            label="来源平台"
+            rules={[
+              { required: true, message: '请输入来源平台' },
+            ]}
+            extra="用于标记导入来源，例如：OpenAI、Azure、Google"
+          >
+            <Input placeholder="例如 openai" />
+          </Form.Item>
+
+          <Form.Item
+            name="source_group"
+            label="来源分组"
+            extra="可选；留空时默认与来源平台相同"
+          >
+            <Input placeholder="例如 openai-prod" />
           </Form.Item>
 
           <Form.Item

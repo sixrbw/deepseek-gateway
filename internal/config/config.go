@@ -94,6 +94,8 @@ type BackendConfig struct {
 	BaseURL        string `yaml:"base_url" validate:"required,url"`
 	APIKey         string `yaml:"api_key"`
 	ModelName      string `yaml:"model_name"`
+	SourcePlatform string `yaml:"source_platform,omitempty" json:"source_platform,omitempty"`
+	SourceGroup    string `yaml:"source_group,omitempty" json:"source_group,omitempty"`
 	Weight         int    `yaml:"weight" validate:"min=0"`
 	Enabled        bool   `yaml:"enabled"`
 	MaxConcurrency int    `yaml:"max_concurrency" validate:"min=0"` // 该后端最大并发请求数，0 表示不限制

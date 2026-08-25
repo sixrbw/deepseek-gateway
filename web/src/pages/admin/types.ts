@@ -16,6 +16,8 @@ export interface Backend {
   name: string;
   base_url: string;
   model_name: string;
+  source_platform?: string;
+  source_group?: string;
   weight: number;
   region: string;
   enabled: boolean;
@@ -82,6 +84,8 @@ export interface BackendFormValues {
   name: string;
   base_url: string;
   model_name: string;
+  source_platform?: string;
+  source_group?: string;
   api_key: string;
   weight: number;
   region: string;

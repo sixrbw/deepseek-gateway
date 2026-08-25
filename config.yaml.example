@@ -54,6 +54,8 @@ models:
         base_url: "https://api.moonshot.cn/v1"
         api_key: "your-kimi-api-key-here"
         model_name: "kimi2.5"
+        source_platform: "moonshot"
+        source_group: "moonshot-cn"
         weight: 20
         max_concurrency: 5    # 最大并发请求数，0 表示不限制（根据 LLM 服务器承载能力设置）
         enabled: true
@@ -61,6 +63,8 @@ models:
         base_url: "https://api.moonshot.cn/v1"
         api_key: "your-kimi-api-key-here"
         model_name: "kimi2.5"
+        source_platform: "moonshot"
+        source_group: "moonshot-cn"
         weight: 15
         max_concurrency: 5
         enabled: true

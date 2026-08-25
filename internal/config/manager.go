@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -268,6 +269,50 @@ func (cm *ConfigManager) DeleteBackend(modelID, backendID string) error {
 	})
 }
 
+func (cm *ConfigManager) DeleteBackends(modelID string, backendIDs []string) error {
+	return cm.updateAndNotify("models", cm.cfg.Models, func(c *Config) error {
+		if len(backendIDs) == 0 {
+			return fmt.Errorf("no backends specified")
+		}
+
+		targets := make(map[string]struct{}, len(backendIDs))
+		for _, backendID := range backendIDs {
+			targets[backendID] = struct{}{}
+		}
+
+		for i, m := range c.Models {
+			if m.ID != modelID {
+				continue
+			}
+
+			found := make(map[string]struct{}, len(targets))
+			newBackends := make([]BackendConfig, 0, len(m.Backends))
+			for _, b := range m.Backends {
+				if _, ok := targets[b.ID]; ok {
+					found[b.ID] = struct{}{}
+					continue
+				}
+				newBackends = append(newBackends, b)
+			}
+
+			if len(found) != len(targets) {
+				var missing []string
+				for backendID := range targets {
+					if _, ok := found[backendID]; !ok {
+						missing = append(missing, backendID)
+					}
+				}
+				return fmt.Errorf("backend(s) not found: %s", strings.Join(missing, ", "))
+			}
+
+			c.Models[i].Backends = newBackends
+			return nil
+		}
+
+		return fmt.Errorf("model %s not found", modelID)
+	})
+}
+
 func (cm *ConfigManager) AddPolicy(policy PolicyConfig) error {
 	return cm.updateAndNotify("policies", cm.cfg.Policies, func(c *Config) error {
 		for _, p := range c.Policies {
@@ -361,7 +406,6 @@ func (cm *ConfigManager) GetPolicyByName(name string) *PolicyConfig {
 	}
 	return nil
 }
-
 
 func (cm *ConfigManager) UpdateSystemSettings(readTimeout, writeTimeout, idleTimeout time.Duration, frontend FrontendConfig, clientFilter ClientFilterConfig) error {
 	return cm.updateAndNotify("all", nil, func(c *Config) error {

@@ -18,18 +18,18 @@ type Model struct {
 }
 
 type ModelCreateRequest struct {
-	ID          string                 `json:"id" binding:"required"`
-	Name        string                 `json:"name" binding:"required"`
-	Description string                 `json:"description"`
+	ID            string                 `json:"id" binding:"required"`
+	Name          string                 `json:"name" binding:"required"`
+	Description   string                 `json:"description"`
 	Enabled       bool                   `json:"enabled"`
 	ContextWindow int                    `json:"context_window"`
 	ModelParams   map[string]interface{} `json:"model_params"`
-	Backends    []BackendCreateInput   `json:"backends"`
+	Backends      []BackendCreateInput   `json:"backends"`
 }
 
 type ModelUpdateRequest struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
+	Name          string                 `json:"name"`
+	Description   string                 `json:"description"`
 	Enabled       *bool                  `json:"enabled"`
 	ContextWindow *int                   `json:"context_window"`
 	ModelParams   map[string]interface{} `json:"model_params"`
@@ -41,6 +41,8 @@ type BackendCreateInput struct {
 	BaseURL        string `json:"base_url" binding:"required,url"`
 	APIKey         string `json:"api_key"`
 	ModelName      string `json:"model_name"`
+	SourcePlatform string `json:"source_platform"`
+	SourceGroup    string `json:"source_group"`
 	Weight         int    `json:"weight"`
 	Region         string `json:"region"`
 	Enabled        bool   `json:"enabled"`
@@ -48,9 +50,11 @@ type BackendCreateInput struct {
 }
 
 type GatewayImportRequest struct {
-	BaseURL string `json:"base_url" binding:"required,url"`
-	APIKey  string `json:"api_key"`
-	Prefix  string `json:"prefix" binding:"required"`
+	BaseURL        string `json:"base_url" binding:"required,url"`
+	APIKey         string `json:"api_key"`
+	Prefix         string `json:"prefix" binding:"required"`
+	SourcePlatform string `json:"source_platform"`
+	SourceGroup    string `json:"source_group"`
 }
 
 // ModelStore 模型配置数据访问层 - 现在从 ConfigManager 读取

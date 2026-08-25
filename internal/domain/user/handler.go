@@ -38,9 +38,9 @@ type RefinedServerConfigJSON struct {
 }
 
 type RefinedSystemConfigJSON struct {
-	Server       RefinedServerConfigJSON    `json:"server" binding:"required"`
-	Frontend     config.FrontendConfig      `json:"frontend" binding:"required"`
-	ClientFilter config.ClientFilterConfig  `json:"client_filter"`
+	Server       RefinedServerConfigJSON   `json:"server" binding:"required"`
+	Frontend     config.FrontendConfig     `json:"frontend" binding:"required"`
+	ClientFilter config.ClientFilterConfig `json:"client_filter"`
 }
 
 type QuotaService interface {
@@ -50,6 +50,7 @@ type QuotaService interface {
 type QuotaStore interface {
 	GetRecentUsageRecords(userID uuid.UUID, days int) ([]map[string]interface{}, error)
 	GetDailyUsageList(userID uuid.UUID, startDate, endDate time.Time) ([]*entity.QuotaUsageDaily, error)
+	GetAllDailyUsageList(startDate, endDate time.Time) ([]*entity.QuotaUsageDaily, error)
 	ValidatePoliciesNoConflict(policyNames []string) error
 }
 
@@ -139,6 +140,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		// /admin/access-logs
 		admin.GET("/access-logs", h.GetAllAccessLogs)
 		admin.GET("/access-logs/export", h.ExportAccessLogsByToken)
+		admin.GET("/token-usage/export", h.ExportTokenUsage)
 	}
 }
 
@@ -534,8 +536,6 @@ func (h *Handler) GetFrontendConfig(c *gin.Context) {
 	})
 }
 
-
-
 // ========== SSO 相关接口 ==========
 
 // GetSSOConfig 获取 SSO 配置（供前端使用）
@@ -910,5 +910,63 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 		cw.Flush()
 
 		_, _ = fw.Write(buf.Bytes())
+	}
+}
+
+func parseDateRange(startDateStr, endDateStr string) (time.Time, time.Time, error) {
+	if startDateStr == "" || endDateStr == "" {
+		return time.Time{}, time.Time{}, fmt.Errorf("start_date 和 end_date 不能为空")
+	}
+
+	startDate, err := time.Parse("2006-01-02", startDateStr)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("start_date 格式无效，应为 YYYY-MM-DD")
+	}
+	endDate, err := time.Parse("2006-01-02", endDateStr)
+	if err != nil {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_date 格式无效，应为 YYYY-MM-DD")
+	}
+	if endDate.Before(startDate) {
+		return time.Time{}, time.Time{}, fmt.Errorf("end_date 不能早于 start_date")
+	}
+	return startDate, endDate, nil
+}
+
+func (h *Handler) ExportTokenUsage(c *gin.Context) {
+	startDate, endDate, err := parseDateRange(c.Query("start_date"), c.Query("end_date"))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	usages, err := h.quotaStore.GetAllDailyUsageList(startDate, endDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	filename := fmt.Sprintf("token-usage-%s-to-%s.csv", startDate.Format("20060102"), endDate.Format("20060102"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+
+	cw := csv.NewWriter(c.Writer)
+	defer cw.Flush()
+
+	_ = cw.Write([]string{
+		"date", "user_id", "model_id", "request_count",
+		"input_tokens", "output_tokens", "total_tokens",
+	})
+
+	for _, usage := range usages {
+		totalTokens := usage.InputTokens + usage.OutputTokens
+		_ = cw.Write([]string{
+			usage.Date.Format("2006-01-02"),
+			usage.UserID.String(),
+			usage.ModelID,
+			strconv.Itoa(usage.RequestCount),
+			strconv.Itoa(usage.InputTokens),
+			strconv.Itoa(usage.OutputTokens),
+			strconv.Itoa(totalTokens),
+		})
 	}
 }

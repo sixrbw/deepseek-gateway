@@ -15,6 +15,8 @@ type Backend struct {
 	APIKey         string       `json:"-"`       // Never return API key in JSON
 	APIKeyMasked   string       `json:"api_key"` // Masked version for display
 	ModelName      string       `json:"model_name"`
+	SourcePlatform string       `json:"source_platform"`
+	SourceGroup    string       `json:"source_group"`
 	Weight         int          `json:"weight"`
 	Enabled        bool         `json:"enabled"`
 	Healthy        bool         `json:"healthy"`
@@ -30,6 +32,8 @@ type BackendCreateRequest struct {
 	BaseURL        string `json:"base_url" binding:"required,url"`
 	APIKey         string `json:"api_key"`
 	ModelName      string `json:"model_name"`
+	SourcePlatform string `json:"source_platform"`
+	SourceGroup    string `json:"source_group"`
 	Weight         int    `json:"weight"`
 	Enabled        bool   `json:"enabled"`
 	MaxConcurrency int    `json:"max_concurrency"`
@@ -40,9 +44,15 @@ type BackendUpdateRequest struct {
 	BaseURL        string `json:"base_url" binding:"omitempty,url"`
 	APIKey         string `json:"api_key"`
 	ModelName      string `json:"model_name"`
+	SourcePlatform string `json:"source_platform"`
+	SourceGroup    string `json:"source_group"`
 	Weight         int    `json:"weight"`
 	Enabled        *bool  `json:"enabled"`
 	MaxConcurrency int    `json:"max_concurrency"`
+}
+
+type BackendBatchDeleteRequest struct {
+	BackendIDs []string `json:"backend_ids" binding:"required"`
 }
 
 // BackendStore handles backend configuration - now from ConfigManager
@@ -72,6 +82,8 @@ func (s *BackendStore) configToBackend(modelID string, cfg config.BackendConfig)
 		APIKey:         cfg.APIKey,
 		APIKeyMasked:   masked,
 		ModelName:      cfg.ModelName,
+		SourcePlatform: cfg.SourcePlatform,
+		SourceGroup:    cfg.SourceGroup,
 		Weight:         cfg.Weight,
 		Enabled:        cfg.Enabled,
 		Healthy:        true,
@@ -88,6 +100,8 @@ func (s *BackendStore) backendToConfig(backend *Backend) config.BackendConfig {
 		BaseURL:        backend.BaseURL,
 		APIKey:         backend.APIKey,
 		ModelName:      backend.ModelName,
+		SourcePlatform: backend.SourcePlatform,
+		SourceGroup:    backend.SourceGroup,
 		Weight:         backend.Weight,
 		Enabled:        backend.Enabled,
 		MaxConcurrency: backend.MaxConcurrency,
@@ -193,6 +207,10 @@ func (s *BackendStore) Delete(id string) error {
 		return nil
 	}
 	return s.cm.DeleteBackend(backend.ModelID, id)
+}
+
+func (s *BackendStore) DeleteBatch(modelID string, ids []string) error {
+	return s.cm.DeleteBackends(modelID, ids)
 }
 
 // UpdateHealth updates the health status of a backend

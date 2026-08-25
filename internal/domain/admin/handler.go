@@ -20,6 +20,7 @@ import (
 // validIDPattern defines the allowed characters for resource IDs (model ID, backend ID, etc.).
 // Only alphanumeric characters, dots, hyphens, and underscores are permitted.
 var validIDPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9._-]*$`)
+var validImportPrefixPattern = regexp.MustCompile(`^[a-zA-Z0-9]+$`)
 
 // validateResourceID checks whether the given ID is safe to use in URL path segments.
 func validateResourceID(id, label string) error {
@@ -78,6 +79,7 @@ func (h *ModelHandler) RegisterRoutes(r *gin.RouterGroup, jwtManager *auth.JWTMa
 		admin.DELETE("/:id", h.Delete)
 		admin.GET("/:id/backends", h.GetModelBackends)
 		admin.POST("/:id/backends", h.CreateBackend)
+		admin.POST("/:id/backends/batch-delete", h.BatchDeleteBackends)
 		admin.PUT("/:id/backends/:backend_id", h.UpdateBackend)
 		admin.DELETE("/:id/backends/:backend_id", h.DeleteBackend)
 	}
@@ -133,6 +135,8 @@ func (h *ModelHandler) Create(c *gin.Context) {
 			ModelID:        model.ID,
 			BaseURL:        backendInput.BaseURL,
 			ModelName:      backendInput.ModelName,
+			SourcePlatform: strings.TrimSpace(backendInput.SourcePlatform),
+			SourceGroup:    strings.TrimSpace(backendInput.SourceGroup),
 			Weight:         backendInput.Weight,
 			Enabled:        backendInput.Enabled,
 			MaxConcurrency: backendInput.MaxConcurrency,
@@ -266,6 +270,8 @@ func (h *ModelHandler) CreateBackend(c *gin.Context) {
 		BaseURL:        req.BaseURL,
 		APIKey:         req.APIKey,
 		ModelName:      req.ModelName,
+		SourcePlatform: strings.TrimSpace(req.SourcePlatform),
+		SourceGroup:    strings.TrimSpace(req.SourceGroup),
 		Weight:         req.Weight,
 		Enabled:        req.Enabled,
 		MaxConcurrency: req.MaxConcurrency,
@@ -311,6 +317,12 @@ func (h *ModelHandler) UpdateBackend(c *gin.Context) {
 	if req.ModelName != "" {
 		backend.ModelName = req.ModelName
 	}
+	if req.SourcePlatform != "" {
+		backend.SourcePlatform = strings.TrimSpace(req.SourcePlatform)
+	}
+	if req.SourceGroup != "" {
+		backend.SourceGroup = strings.TrimSpace(req.SourceGroup)
+	}
 	if req.Weight > 0 {
 		backend.Weight = req.Weight
 	}
@@ -325,6 +337,75 @@ func (h *ModelHandler) UpdateBackend(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"data": backend})
+}
+
+func (h *ModelHandler) BatchDeleteBackends(c *gin.Context) {
+	modelID := c.Param("id")
+
+	model, err := h.store.GetByID(modelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if model == nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "model not found"})
+		return
+	}
+
+	var req entity.BackendBatchDeleteRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(req.BackendIDs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "backend_ids 不能为空"})
+		return
+	}
+
+	backends, err := h.backendStore.ListByModel(modelID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	existing := make(map[string]struct{}, len(backends))
+	for _, backend := range backends {
+		existing[backend.ID] = struct{}{}
+	}
+
+	ids := make([]string, 0, len(req.BackendIDs))
+	seen := make(map[string]struct{}, len(req.BackendIDs))
+	for _, backendID := range req.BackendIDs {
+		backendID = strings.TrimSpace(backendID)
+		if backendID == "" {
+			continue
+		}
+		if err := validateResourceID(backendID, "后端ID"); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+			return
+		}
+		if _, ok := existing[backendID]; !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("backend %s not found in model %s", backendID, modelID)})
+			return
+		}
+		if _, ok := seen[backendID]; ok {
+			continue
+		}
+		seen[backendID] = struct{}{}
+		ids = append(ids, backendID)
+	}
+	if len(ids) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "backend_ids 不能为空"})
+		return
+	}
+
+	if err := h.backendStore.DeleteBatch(modelID, ids); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": fmt.Sprintf("成功删除 %d 个后端实例", len(ids)),
+	})
 }
 
 func (h *ModelHandler) DeleteBackend(c *gin.Context) {
@@ -369,6 +450,19 @@ func (h *ModelHandler) ImportFromGateway(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "无效的参数内容: " + err.Error()})
 		return
+	}
+	req.Prefix = strings.TrimSpace(req.Prefix)
+	req.SourcePlatform = strings.TrimSpace(req.SourcePlatform)
+	req.SourceGroup = strings.TrimSpace(req.SourceGroup)
+	if !validImportPrefixPattern.MatchString(req.Prefix) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "prefix 只能包含英文字母和数字"})
+		return
+	}
+	if req.SourcePlatform == "" {
+		req.SourcePlatform = req.Prefix
+	}
+	if req.SourceGroup == "" {
+		req.SourceGroup = req.SourcePlatform
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
@@ -444,13 +538,15 @@ func (h *ModelHandler) ImportFromGateway(c *gin.Context) {
 			if existingBackend == nil {
 				// We found an available ID
 				backend := &entity.Backend{
-					ID:        backendID,
-					ModelID:   sanitizedModelID,
-					BaseURL:   req.BaseURL,
-					APIKey:    req.APIKey,
-					ModelName: modelID,
-					Weight:    1,
-					Enabled:   true,
+					ID:             backendID,
+					ModelID:        sanitizedModelID,
+					BaseURL:        req.BaseURL,
+					APIKey:         req.APIKey,
+					ModelName:      modelID,
+					SourcePlatform: req.SourcePlatform,
+					SourceGroup:    req.SourceGroup,
+					Weight:         1,
+					Enabled:        true,
 				}
 				if err := h.backendStore.Create(backend); err != nil {
 					c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("为模型 %s 创建后端失败: %s", sanitizedModelID, err.Error())})
