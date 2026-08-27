@@ -56,6 +56,9 @@ type QuotaStore interface {
 type UsageService interface {
 	GetRecentAccess(userID uuid.UUID, limit int) []usage.AccessLog
 	GetAllRecentAccess(limit int) []usage.AccessLog
+	GetAccessLogsByDateRange(userID string, start, end time.Time, withPayload bool) []usage.AccessLog
+	GetAllAccessLogsByDateRange(start, end time.Time, withPayload bool) []usage.AccessLog
+	CleanupOldPayloads(retentionDays int) (int64, error)
 }
 
 type Cache interface {
@@ -464,12 +467,22 @@ func (h *Handler) GetAccessLogs(c *gin.Context) {
 	// 支持查询参数 ?detailed=true 返回完整信息
 	detailed := c.Query("detailed") == "true"
 
-	// 获取最近20条访问记录
-	logs := h.usageService.GetRecentAccess(user.ID, 20)
+	// 支持日期范围过滤 ?start_date=2026-01-01&end_date=2026-01-31
+	startDate, endDate, hasRange := parseDateRange(c)
+
+	var logs []usage.AccessLog
+	if hasRange {
+		logs = h.usageService.GetAccessLogsByDateRange(user.ID.String(), startDate, endDate, detailed)
+	} else {
+		limitStr := c.DefaultQuery("limit", "50")
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit <= 0 {
+			limit = 50
+		}
+		logs = h.usageService.GetRecentAccess(user.ID, limit)
+	}
 
 	if detailed {
-		// 返回完整信息（包含请求/响应体和头信息）
-		// 在返回前也对 UserAgent 进行脱敏/美化处理
 		for i := range logs {
 			logs[i].Beautify()
 		}
@@ -477,7 +490,6 @@ func (h *Handler) GetAccessLogs(c *gin.Context) {
 		return
 	}
 
-	// 默认返回简化版本（不包含请求/响应体和头信息，保持兼容性）
 	simpleLogs := make([]usage.SimpleAccessLog, 0, len(logs))
 	for _, log := range logs {
 		simpleLogs = append(simpleLogs, log.ToSimple())
@@ -490,19 +502,22 @@ func (h *Handler) GetAllAccessLogs(c *gin.Context) {
 	// 支持查询参数 ?detailed=true 返回完整信息
 	detailed := c.Query("detailed") == "true"
 
-	// 从查询参数获取 limit
-	limitStr := c.DefaultQuery("limit", "20")
-	limit, err := strconv.Atoi(limitStr)
-	if err != nil || limit <= 0 {
-		limit = 20
+	// 支持日期范围过滤 ?start_date=2026-01-01&end_date=2026-01-31
+	startDate, endDate, hasRange := parseDateRange(c)
+
+	var logs []usage.AccessLog
+	if hasRange {
+		logs = h.usageService.GetAllAccessLogsByDateRange(startDate, endDate, detailed)
+	} else {
+		limitStr := c.DefaultQuery("limit", "50")
+		limit, err := strconv.Atoi(limitStr)
+		if err != nil || limit <= 0 {
+			limit = 50
+		}
+		logs = h.usageService.GetAllRecentAccess(limit)
 	}
 
-	// 获取最近访问记录
-	logs := h.usageService.GetAllRecentAccess(limit)
-
 	if detailed {
-		// 返回完整信息（包含请求/响应体和头信息）
-		// 在返回前也对 UserAgent 进行脱敏/美化处理
 		for i := range logs {
 			logs[i].Beautify()
 		}
@@ -510,7 +525,6 @@ func (h *Handler) GetAllAccessLogs(c *gin.Context) {
 		return
 	}
 
-	// 默认返回简化版本
 	simpleLogs := make([]usage.SimpleAccessLog, 0, len(logs))
 	for _, log := range logs {
 		simpleLogs = append(simpleLogs, log.ToSimple())
@@ -839,8 +853,33 @@ func sanitizeFilename(name string) string {
 }
 
 // ExportAccessLogsByToken 导出日志按 API Token 分组，打包为 zip 文件
+// 支持日期范围过滤：?start_date=2026-01-01&end_date=2026-01-31
+// 支持多日期选择：?dates=2026-01-01,2026-01-02,2026-01-03
+// 7 天内的记录包含完整 payload，超过 7 天的记录仅导出元数据
 func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
-	logs := h.usageService.GetAllRecentAccess(0) // 0 = no limit
+	var logs []usage.AccessLog
+
+	// 支持多日期模式：?dates=2026-08-20,2026-08-21
+	if datesStr := c.Query("dates"); datesStr != "" {
+		dateStrs := strings.Split(datesStr, ",")
+		for _, ds := range dateStrs {
+			ds = strings.TrimSpace(ds)
+			t, err := time.ParseInLocation("2006-01-02", ds, time.UTC)
+			if err != nil {
+				continue
+			}
+			dayLogs := h.usageService.GetAllAccessLogsByDateRange(t, t.AddDate(0, 0, 1), true)
+			logs = append(logs, dayLogs...)
+		}
+	} else {
+		// 日期范围模式或全量
+		startDate, endDate, hasRange := parseDateRange(c)
+		if hasRange {
+			logs = h.usageService.GetAllAccessLogsByDateRange(startDate, endDate, true)
+		} else {
+			logs = h.usageService.GetAllAccessLogsByDateRange(time.Time{}, time.Time{}, true)
+		}
+	}
 
 	// 以 APIKey 前缀（有则用前缀，无则用 ID，否则归 unknown_token）为 key 分组
 	groups := make(map[string][]usage.AccessLog)
@@ -873,6 +912,7 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 		"input_tokens", "output_tokens", "total_tokens",
 		"status_code", "duration_ms",
 		"request_bytes", "response_bytes",
+		"request_body", "response_body", "payload_status",
 	}
 
 	for tokenKey, tokenLogs := range groups {
@@ -888,6 +928,14 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 
 		for _, l := range tokenLogs {
 			totalTokens := l.InputTokens + l.OutputTokens
+
+			payloadStatus := "available"
+			if l.PayloadExpired {
+				payloadStatus = "expired"
+			} else if l.RequestBody == "" && l.ResponseBody == "" {
+				payloadStatus = "none"
+			}
+
 			record := []string{
 				l.Timestamp.Format(time.RFC3339),
 				l.UserID.String(),
@@ -904,6 +952,9 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 				strconv.FormatInt(l.DurationMs, 10),
 				strconv.FormatInt(l.RequestBytes, 10),
 				strconv.FormatInt(l.ResponseBytes, 10),
+				l.RequestBody,
+				l.ResponseBody,
+				payloadStatus,
 			}
 			_ = cw.Write(record)
 		}
@@ -911,4 +962,31 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 
 		_, _ = fw.Write(buf.Bytes())
 	}
+}
+
+// parseDateRange 解析 ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD 参数
+// 返回的 endDate 是 end_date 当天的次日（即包含整个 end_date 当天）
+func parseDateRange(c *gin.Context) (start, end time.Time, ok bool) {
+	startStr := c.Query("start_date")
+	endStr := c.Query("end_date")
+	if startStr == "" && endStr == "" {
+		return time.Time{}, time.Time{}, false
+	}
+	var err error
+	if startStr != "" {
+		start, err = time.ParseInLocation("2006-01-02", startStr, time.UTC)
+		if err != nil {
+			return time.Time{}, time.Time{}, false
+		}
+	}
+	if endStr != "" {
+		end, err = time.ParseInLocation("2006-01-02", endStr, time.UTC)
+		if err != nil {
+			return time.Time{}, time.Time{}, false
+		}
+		end = end.AddDate(0, 0, 1) // 包含整个 end_date 当天
+	} else {
+		end = time.Now().UTC().AddDate(0, 0, 1)
+	}
+	return start, end, true
 }

@@ -1,39 +1,39 @@
 package usage
 
 import (
-	"container/ring"
-	"sort"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"modelgate/internal/infra/constants"
 	"modelgate/internal/infra/logger"
 	"modelgate/internal/infra/utils"
+	entity "modelgate/internal/repository"
 )
 
-// AccessLog 访问日志结构
+// AccessLog 访问日志结构（用于 API 响应）
 type AccessLog struct {
 	UserID          uuid.UUID         `json:"user_id"`
-	APIKeyID        uuid.UUID         `json:"api_key_id"`        // API Key ID（若通过 API Key 认证）
-	APIKeyName      string            `json:"api_key_name"`      // API Key 名称
-	APIKeyPrefix    string            `json:"api_key_prefix"`    // API Key 前缀
-	Method          string            `json:"method"`           // GET/POST/PUT/DELETE
-	Path            string            `json:"path"`             // 访问路径
-	ClientIP        string            `json:"client_ip"`        // 客户端IP
-	UserAgent       string            `json:"user_agent"`       // 用户代理
-	ModelName       string            `json:"model_name"`       // 模型名称
-	Timestamp       time.Time         `json:"timestamp"`        // 访问时间
-	StatusCode      int               `json:"status_code"`      // HTTP状态码
-	RequestBytes    int64             `json:"request_bytes"`    // 请求字节数
-	ResponseBytes   int64             `json:"response_bytes"`   // 响应字节数
-	RequestHeaders  map[string]string `json:"request_headers"`  // 请求头
-	RequestBody     string            `json:"request_body"`     // 请求体（限制大小）
-	ResponseHeaders map[string]string `json:"response_headers"` // 响应头
-	ResponseBody    string            `json:"response_body"`    // 响应体（限制大小）
-	InputTokens     int               `json:"input_tokens"`     // 请求Tokens
-	OutputTokens    int               `json:"output_tokens"`    // 响应Tokens
-	DurationMs      int64             `json:"duration_ms"`      // 请求持续时间(毫秒)
+	APIKeyID        uuid.UUID         `json:"api_key_id"`
+	APIKeyName      string            `json:"api_key_name"`
+	APIKeyPrefix    string            `json:"api_key_prefix"`
+	Method          string            `json:"method"`
+	Path            string            `json:"path"`
+	ClientIP        string            `json:"client_ip"`
+	UserAgent       string            `json:"user_agent"`
+	ModelName       string            `json:"model_name"`
+	Timestamp       time.Time         `json:"timestamp"`
+	StatusCode      int               `json:"status_code"`
+	RequestBytes    int64             `json:"request_bytes"`
+	ResponseBytes   int64             `json:"response_bytes"`
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
+	RequestBody     string            `json:"request_body,omitempty"`
+	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
+	ResponseBody    string            `json:"response_body,omitempty"`
+	InputTokens     int               `json:"input_tokens"`
+	OutputTokens    int               `json:"output_tokens"`
+	DurationMs      int64             `json:"duration_ms"`
+	// PayloadExpired 为 true 时表示 payload 已超过保留期被清理
+	PayloadExpired bool `json:"payload_expired,omitempty"`
 }
 
 // SimpleAccessLog 简化版的访问日志（用于列表显示）
@@ -71,12 +71,33 @@ func (log *AccessLog) ToSimple() SimpleAccessLog {
 	}
 }
 
-// Service 使用记录服务
-type Service struct {
-	logger     *logger.UserLogger
-	accessLogs map[uuid.UUID]*ring.Ring // 每个用户的访问日志循环缓冲区
-	logsMutex  sync.RWMutex             // 保护 accessLogs 的并发访问
-	maxLogs    int                      // 每个用户最大日志条数
+// rowToAccessLog 将 AccessLogRow 转为 AccessLog（不含 payload）
+func rowToAccessLog(r entity.AccessLogRow) AccessLog {
+	uid, _ := uuid.Parse(r.UserID)
+	akid, _ := uuid.Parse(r.APIKeyID)
+	log := AccessLog{
+		UserID:        uid,
+		APIKeyID:      akid,
+		APIKeyName:    r.APIKeyName,
+		APIKeyPrefix:  r.APIKeyPrefix,
+		Method:        r.Method,
+		Path:          r.Path,
+		ClientIP:      r.ClientIP,
+		UserAgent:     r.UserAgent,
+		ModelName:     r.ModelName,
+		Timestamp:     r.Timestamp,
+		StatusCode:    r.StatusCode,
+		RequestBytes:  r.RequestBytes,
+		ResponseBytes: r.ResponseBytes,
+		InputTokens:   r.InputTokens,
+		OutputTokens:  r.OutputTokens,
+		DurationMs:    r.DurationMs,
+	}
+	// 若原本有 payload 但 has_payload=false，说明已被清理
+	if !r.HasPayload {
+		log.PayloadExpired = false // has_payload=0 可能根本没有过 payload（老数据迁移兼容），不标记
+	}
+	return log
 }
 
 // Record 使用记录
@@ -99,16 +120,28 @@ type Record struct {
 	TTFTMs          int64
 }
 
-// NewService 创建使用记录服务
+// Service 使用记录服务
+type Service struct {
+	logger   *logger.UserLogger
+	logStore *entity.AccessLogStore
+}
+
+// NewService 创建使用记录服务（无 SQLite 依赖，保持向后兼容）
 func NewService(logger *logger.UserLogger) *Service {
 	return &Service{
-		logger:     logger,
-		accessLogs: make(map[uuid.UUID]*ring.Ring),
-		maxLogs:    20, // 每个用户最多保存20条访问记录
+		logger: logger,
 	}
 }
 
-// RecordUsageDetailed 记录详细的使用信息（写文件日志 + ring buffer）
+// NewServiceWithStore 创建使用记录服务（带 SQLite 日志存储）
+func NewServiceWithStore(lg *logger.UserLogger, logStore *entity.AccessLogStore) *Service {
+	return &Service{
+		logger:   lg,
+		logStore: logStore,
+	}
+}
+
+// RecordUsageDetailed 记录详细的使用信息
 func (s *Service) RecordUsageDetailed(record *Record) {
 	s.logger.LogUsageWithDetails(record.UserID.String(), logger.UsageLogEntry{
 		Time:            time.Now().Format(time.RFC3339),
@@ -130,14 +163,22 @@ func (s *Service) RecordUsageDetailed(record *Record) {
 	})
 }
 
-// CleanupOldRecords 清理旧记录（由 logger 自动处理）
+// CleanupOldRecords 清理旧记录
 func (s *Service) CleanupOldRecords() error {
 	return s.logger.CleanupOldLogs()
 }
 
-// GetUsageStats 获取使用统计（简化版本）
+// CleanupOldPayloads 清理超过保留期的 payload（由后台任务定期调用）
+func (s *Service) CleanupOldPayloads(retentionDays int) (int64, error) {
+	if s.logStore == nil {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	return s.logStore.DeleteOldPayloads(cutoff)
+}
+
+// GetUsageStats 获取使用统计
 func (s *Service) GetUsageStats(userID string, startDate, endDate time.Time) (map[string]interface{}, error) {
-	// 简化处理，返回空统计
 	return map[string]interface{}{
 		"user_id":    userID,
 		"start_date": startDate.Format("2006-01-02"),
@@ -146,13 +187,10 @@ func (s *Service) GetUsageStats(userID string, startDate, endDate time.Time) (ma
 	}, nil
 }
 
-// Flush 刷新日志（立即关闭并重开文件，确保数据写入磁盘）
-func (s *Service) Flush() {
-	// 在 SQLite 版本中，日志是实时写入的，不需要批量 flush
-	// 但保留此方法以兼容旧代码
-}
+// Flush 刷新日志（兼容旧代码）
+func (s *Service) Flush() {}
 
-// RecordAccess 记录用户访问日志
+// RecordAccess 记录用户访问日志（简化版）
 func (s *Service) RecordAccess(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, durationMs int64) {
 	s.RecordAccessDetailed(userID, uuid.Nil, "", "", method, path, clientIP, userAgent, modelName, statusCode, requestBytes, responseBytes, nil, "", nil, "", 0, 0, durationMs)
 }
@@ -174,43 +212,104 @@ func (s *Service) RecordAccessDetailed(
 	outputTokens int,
 	durationMs int64,
 ) {
-	s.logsMutex.Lock()
-	defer s.logsMutex.Unlock()
-
-	// 获取或创建用户的 ring buffer
-	r, exists := s.accessLogs[userID]
-	if !exists {
-		r = ring.New(s.maxLogs)
-		s.accessLogs[userID] = r
+	if s.logStore == nil {
+		return
 	}
 
-	// 创建访问日志条目（截断大内容）
-	log := AccessLog{
-		UserID:          userID,
-		APIKeyID:        apiKeyID,
-		APIKeyName:      apiKeyName,
-		APIKeyPrefix:    apiKeyPrefix,
-		Method:          method,
-		Path:            path,
-		ClientIP:        clientIP,
-		UserAgent:       userAgent,
-		ModelName:       modelName,
-		Timestamp:       time.Now(),
-		StatusCode:      statusCode,
-		RequestBytes:    requestBytes,
-		ResponseBytes:   responseBytes,
-		RequestHeaders:  requestHeaders,
-		RequestBody:     truncateString(requestBody, constants.MaxLogRequestBodySize),
-		ResponseHeaders: responseHeaders,
-		ResponseBody:    truncateString(responseBody, constants.MaxLogResponseBodySize),
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		DurationMs:      durationMs,
+	// 截断大内容
+	requestBody = truncateString(requestBody, constants.MaxLogRequestBodySize)
+	responseBody = truncateString(responseBody, constants.MaxLogResponseBodySize)
+
+	if err := s.logStore.Insert(
+		userID, apiKeyID, apiKeyName, apiKeyPrefix,
+		method, path, clientIP, userAgent, modelName,
+		statusCode, requestBytes, responseBytes,
+		requestHeaders, requestBody, responseHeaders, responseBody,
+		inputTokens, outputTokens, durationMs,
+	); err != nil {
+		// 非致命错误，仅记录
+		_ = err
+	}
+}
+
+// GetRecentAccess 获取用户最近访问记录（按时间倒序）
+func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.logStore.List(entity.QueryOptions{
+		UserID: userID.String(),
+		Limit:  limit,
+	})
+	if err != nil {
+		return []AccessLog{}
+	}
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, rowToAccessLog(r))
+	}
+	return logs
+}
+
+// GetAllRecentAccess 获取所有用户最近的访问记录（按时间倒序）
+func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	rows, err := s.logStore.List(entity.QueryOptions{Limit: limit})
+	if err != nil {
+		return []AccessLog{}
+	}
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, rowToAccessLog(r))
+	}
+	return logs
+}
+
+// GetAccessLogsByDateRange 获取指定时间范围内的访问记录（含 payload，若已过期则标记）
+func (s *Service) GetAccessLogsByDateRange(userID string, start, end time.Time, withPayload bool) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	opts := entity.QueryOptions{
+		UserID:    userID,
+		StartTime: start,
+		EndTime:   end,
+	}
+	rows, err := s.logStore.List(opts)
+	if err != nil {
+		return []AccessLog{}
 	}
 
-	// 存入 ring buffer
-	r.Value = log
-	s.accessLogs[userID] = r.Next()
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		log := rowToAccessLog(r)
+		if withPayload && r.HasPayload {
+			payload, _ := s.logStore.GetPayload(r.ID)
+			if payload != nil {
+				log.RequestHeaders = payload.RequestHeaders
+				log.RequestBody = payload.RequestBody
+				log.ResponseHeaders = payload.ResponseHeaders
+				log.ResponseBody = payload.ResponseBody
+			} else {
+				// payload 已被清理
+				log.PayloadExpired = true
+			}
+		} else if r.HasPayload && !withPayload {
+			// 不需要 payload，不标记
+		}
+		logs = append(logs, log)
+	}
+	return logs
+}
+
+// GetAllAccessLogsByDateRange 获取所有用户指定时间范围内的访问记录
+func (s *Service) GetAllAccessLogsByDateRange(start, end time.Time, withPayload bool) []AccessLog {
+	return s.GetAccessLogsByDateRange("", start, end, withPayload)
 }
 
 // truncateString 截断字符串到指定长度
@@ -219,77 +318,4 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "\n[truncated...]"
-}
-
-// GetRecentAccess 获取用户最近访问记录（按时间倒序）
-func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
-	s.logsMutex.RLock()
-	defer s.logsMutex.RUnlock()
-
-	r, exists := s.accessLogs[userID]
-	if !exists {
-		return []AccessLog{}
-	}
-
-	// 限制最大条数
-	if limit > s.maxLogs {
-		limit = s.maxLogs
-	}
-	if limit <= 0 {
-		limit = s.maxLogs
-	}
-
-	var logs []AccessLog
-	// 从当前位置开始遍历，收集所有非空条目
-	r.Do(func(p interface{}) {
-		if p != nil {
-			log := p.(AccessLog)
-			logs = append(logs, log)
-		}
-	})
-
-	// 按时间倒序排序（最新的在前），与 GetAllRecentAccess 保持一致
-	// 注意：不能用简单 reverse，因为 go 异步写入可能导致 ring buffer 中顺序不严格按时间排列
-	sort.SliceStable(logs, func(i, j int) bool {
-		return logs[i].Timestamp.After(logs[j].Timestamp)
-	})
-
-	// 限制返回条数
-	if len(logs) > limit {
-		logs = logs[:limit]
-	}
-
-	return logs
-}
-
-// GetAllRecentAccess 获取所有用户最近的访问记录（按时间倒序）
-func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
-	s.logsMutex.RLock()
-	defer s.logsMutex.RUnlock()
-
-	var allLogs []AccessLog
-
-	for _, r := range s.accessLogs {
-		if r == nil {
-			continue
-		}
-		r.Do(func(p interface{}) {
-			if p != nil {
-				log := p.(AccessLog)
-				allLogs = append(allLogs, log)
-			}
-		})
-	}
-
-	// 按时间倒序排序（最新的在前）
-	sort.SliceStable(allLogs, func(i, j int) bool {
-		return allLogs[i].Timestamp.After(allLogs[j].Timestamp)
-	})
-
-	// 限制返回条数
-	if limit > 0 && len(allLogs) > limit {
-		allLogs = allLogs[:limit]
-	}
-
-	return allLogs
 }
