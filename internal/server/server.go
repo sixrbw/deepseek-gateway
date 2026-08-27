@@ -149,7 +149,7 @@ func (s *Server) initServices() {
 	s.apiKeyService = apikey.NewService(s.apiKeyStore, s.userStore, s.localCache)
 	s.dashboardService = dashboard.NewService(s.db.DB)
 	s.quotaService = quota.NewService(s.quotaStore, s.modelStore, s.apiKeyStore, s.dashboardService)
-	s.usageService = usage.NewService(s.userLogger)
+	s.usageService = usage.NewServiceWithDB(s.userLogger, s.db.DB)
 
 	// Proxy
 	s.lb = proxy.NewRoundRobinBalancer()

@@ -56,6 +56,7 @@ type QuotaStore interface {
 type UsageService interface {
 	GetRecentAccess(userID uuid.UUID, limit int) []usage.AccessLog
 	GetAllRecentAccess(limit int) []usage.AccessLog
+	GetAccessLogsByDates(dates []string, userID string, fn func(usage.AccessLog) error) error
 }
 
 type Cache interface {
@@ -139,6 +140,7 @@ func (h *Handler) RegisterRoutes(r *gin.RouterGroup) {
 		// /admin/access-logs
 		admin.GET("/access-logs", h.GetAllAccessLogs)
 		admin.GET("/access-logs/export", h.ExportAccessLogsByToken)
+		admin.GET("/access-logs/export-by-dates", h.ExportAccessLogsByDates)
 	}
 }
 
@@ -911,4 +913,88 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 
 		_, _ = fw.Write(buf.Bytes())
 	}
+}
+
+// ExportAccessLogsByDates 按多个日期导出访问日志为 CSV（流式）
+// 查询参数：
+//   dates  - 逗号分隔的日期列表，格式 YYYY-MM-DD，例如 2026-08-20,2026-08-21
+//   user_id - (可选) 过滤特定用户
+func (h *Handler) ExportAccessLogsByDates(c *gin.Context) {
+	datesParam := c.Query("dates")
+	if datesParam == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "dates parameter is required (comma-separated YYYY-MM-DD)"})
+		return
+	}
+
+	rawDates := strings.Split(datesParam, ",")
+	var validDates []string
+	for _, d := range rawDates {
+		d = strings.TrimSpace(d)
+		if _, err := time.Parse("2006-01-02", d); err == nil {
+			validDates = append(validDates, d)
+		}
+	}
+	if len(validDates) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no valid dates provided; use YYYY-MM-DD format"})
+		return
+	}
+
+	userIDParam := c.Query("user_id")
+
+	filename := fmt.Sprintf("access-logs-%s.csv", time.Now().Format("20060102-150405"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+
+	cw := csv.NewWriter(c.Writer)
+	_ = cw.Write([]string{
+		"id", "timestamp", "user_id",
+		"api_key_prefix", "api_key_name",
+		"method", "path", "client_ip", "user_agent",
+		"model_name", "status_code",
+		"input_tokens", "output_tokens",
+		"request_bytes", "response_bytes",
+		"duration_ms",
+		"request_headers", "request_body",
+		"response_headers", "response_body",
+	})
+	cw.Flush()
+
+	_ = h.usageService.GetAccessLogsByDates(validDates, userIDParam, func(l usage.AccessLog) error {
+		reqHeaders := ""
+		if len(l.RequestHeaders) > 0 {
+			if b, err := json.Marshal(l.RequestHeaders); err == nil {
+				reqHeaders = string(b)
+			}
+		}
+		respHeaders := ""
+		if len(l.ResponseHeaders) > 0 {
+			if b, err := json.Marshal(l.ResponseHeaders); err == nil {
+				respHeaders = string(b)
+			}
+		}
+		_ = cw.Write([]string{
+			strconv.FormatInt(l.ID, 10),
+			l.Timestamp.Format(time.RFC3339),
+			l.UserID.String(),
+			l.APIKeyPrefix,
+			l.APIKeyName,
+			l.Method,
+			l.Path,
+			l.ClientIP,
+			l.UserAgent,
+			l.ModelName,
+			strconv.Itoa(l.StatusCode),
+			strconv.Itoa(l.InputTokens),
+			strconv.Itoa(l.OutputTokens),
+			strconv.FormatInt(l.RequestBytes, 10),
+			strconv.FormatInt(l.ResponseBytes, 10),
+			strconv.FormatInt(l.DurationMs, 10),
+			reqHeaders,
+			l.RequestBody,
+			respHeaders,
+			l.ResponseBody,
+		})
+		cw.Flush()
+		return nil
+	})
 }

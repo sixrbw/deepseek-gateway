@@ -1,9 +1,12 @@
 package usage
 
 import (
-	"container/ring"
+	"bytes"
+	"compress/gzip"
+	"database/sql"
+	"encoding/json"
+	"io"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,26 +17,27 @@ import (
 
 // AccessLog 访问日志结构
 type AccessLog struct {
+	ID              int64             `json:"id"`
 	UserID          uuid.UUID         `json:"user_id"`
-	APIKeyID        uuid.UUID         `json:"api_key_id"`        // API Key ID（若通过 API Key 认证）
-	APIKeyName      string            `json:"api_key_name"`      // API Key 名称
-	APIKeyPrefix    string            `json:"api_key_prefix"`    // API Key 前缀
-	Method          string            `json:"method"`           // GET/POST/PUT/DELETE
-	Path            string            `json:"path"`             // 访问路径
-	ClientIP        string            `json:"client_ip"`        // 客户端IP
-	UserAgent       string            `json:"user_agent"`       // 用户代理
-	ModelName       string            `json:"model_name"`       // 模型名称
-	Timestamp       time.Time         `json:"timestamp"`        // 访问时间
-	StatusCode      int               `json:"status_code"`      // HTTP状态码
-	RequestBytes    int64             `json:"request_bytes"`    // 请求字节数
-	ResponseBytes   int64             `json:"response_bytes"`   // 响应字节数
-	RequestHeaders  map[string]string `json:"request_headers"`  // 请求头
-	RequestBody     string            `json:"request_body"`     // 请求体（限制大小）
-	ResponseHeaders map[string]string `json:"response_headers"` // 响应头
-	ResponseBody    string            `json:"response_body"`    // 响应体（限制大小）
-	InputTokens     int               `json:"input_tokens"`     // 请求Tokens
-	OutputTokens    int               `json:"output_tokens"`    // 响应Tokens
-	DurationMs      int64             `json:"duration_ms"`      // 请求持续时间(毫秒)
+	APIKeyID        uuid.UUID         `json:"api_key_id"`
+	APIKeyName      string            `json:"api_key_name"`
+	APIKeyPrefix    string            `json:"api_key_prefix"`
+	Method          string            `json:"method"`
+	Path            string            `json:"path"`
+	ClientIP        string            `json:"client_ip"`
+	UserAgent       string            `json:"user_agent"`
+	ModelName       string            `json:"model_name"`
+	Timestamp       time.Time         `json:"timestamp"`
+	StatusCode      int               `json:"status_code"`
+	RequestBytes    int64             `json:"request_bytes"`
+	ResponseBytes   int64             `json:"response_bytes"`
+	RequestHeaders  map[string]string `json:"request_headers"`
+	RequestBody     string            `json:"request_body"`
+	ResponseHeaders map[string]string `json:"response_headers"`
+	ResponseBody    string            `json:"response_body"`
+	InputTokens     int               `json:"input_tokens"`
+	OutputTokens    int               `json:"output_tokens"`
+	DurationMs      int64             `json:"duration_ms"`
 }
 
 // SimpleAccessLog 简化版的访问日志（用于列表显示）
@@ -73,10 +77,8 @@ func (log *AccessLog) ToSimple() SimpleAccessLog {
 
 // Service 使用记录服务
 type Service struct {
-	logger     *logger.UserLogger
-	accessLogs map[uuid.UUID]*ring.Ring // 每个用户的访问日志循环缓冲区
-	logsMutex  sync.RWMutex             // 保护 accessLogs 的并发访问
-	maxLogs    int                      // 每个用户最大日志条数
+	logger *logger.UserLogger
+	db     *sql.DB
 }
 
 // Record 使用记录
@@ -99,16 +101,22 @@ type Record struct {
 	TTFTMs          int64
 }
 
-// NewService 创建使用记录服务
+// NewService 创建使用记录服务（内存模式，向后兼容）
 func NewService(logger *logger.UserLogger) *Service {
 	return &Service{
-		logger:     logger,
-		accessLogs: make(map[uuid.UUID]*ring.Ring),
-		maxLogs:    20, // 每个用户最多保存20条访问记录
+		logger: logger,
 	}
 }
 
-// RecordUsageDetailed 记录详细的使用信息（写文件日志 + ring buffer）
+// NewServiceWithDB 创建带数据库持久化的使用记录服务
+func NewServiceWithDB(logger *logger.UserLogger, db *sql.DB) *Service {
+	return &Service{
+		logger: logger,
+		db:     db,
+	}
+}
+
+// RecordUsageDetailed 记录详细的使用信息（写文件日志）
 func (s *Service) RecordUsageDetailed(record *Record) {
 	s.logger.LogUsageWithDetails(record.UserID.String(), logger.UsageLogEntry{
 		Time:            time.Now().Format(time.RFC3339),
@@ -135,9 +143,8 @@ func (s *Service) CleanupOldRecords() error {
 	return s.logger.CleanupOldLogs()
 }
 
-// GetUsageStats 获取使用统计（简化版本）
+// GetUsageStats 获取使用统计
 func (s *Service) GetUsageStats(userID string, startDate, endDate time.Time) (map[string]interface{}, error) {
-	// 简化处理，返回空统计
 	return map[string]interface{}{
 		"user_id":    userID,
 		"start_date": startDate.Format("2006-01-02"),
@@ -146,13 +153,10 @@ func (s *Service) GetUsageStats(userID string, startDate, endDate time.Time) (ma
 	}, nil
 }
 
-// Flush 刷新日志（立即关闭并重开文件，确保数据写入磁盘）
-func (s *Service) Flush() {
-	// 在 SQLite 版本中，日志是实时写入的，不需要批量 flush
-	// 但保留此方法以兼容旧代码
-}
+// Flush 保留以兼容旧代码
+func (s *Service) Flush() {}
 
-// RecordAccess 记录用户访问日志
+// RecordAccess 记录用户访问日志（简单版）
 func (s *Service) RecordAccess(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, durationMs int64) {
 	s.RecordAccessDetailed(userID, uuid.Nil, "", "", method, path, clientIP, userAgent, modelName, statusCode, requestBytes, responseBytes, nil, "", nil, "", 0, 0, durationMs)
 }
@@ -174,43 +178,29 @@ func (s *Service) RecordAccessDetailed(
 	outputTokens int,
 	durationMs int64,
 ) {
-	s.logsMutex.Lock()
-	defer s.logsMutex.Unlock()
-
-	// 获取或创建用户的 ring buffer
-	r, exists := s.accessLogs[userID]
-	if !exists {
-		r = ring.New(s.maxLogs)
-		s.accessLogs[userID] = r
+	if s.db == nil {
+		return
 	}
 
-	// 创建访问日志条目（截断大内容）
-	log := AccessLog{
-		UserID:          userID,
-		APIKeyID:        apiKeyID,
-		APIKeyName:      apiKeyName,
-		APIKeyPrefix:    apiKeyPrefix,
-		Method:          method,
-		Path:            path,
-		ClientIP:        clientIP,
-		UserAgent:       userAgent,
-		ModelName:       modelName,
-		Timestamp:       time.Now(),
-		StatusCode:      statusCode,
-		RequestBytes:    requestBytes,
-		ResponseBytes:   responseBytes,
-		RequestHeaders:  requestHeaders,
-		RequestBody:     truncateString(requestBody, constants.MaxLogRequestBodySize),
-		ResponseHeaders: responseHeaders,
-		ResponseBody:    truncateString(responseBody, constants.MaxLogResponseBodySize),
-		InputTokens:     inputTokens,
-		OutputTokens:    outputTokens,
-		DurationMs:      durationMs,
-	}
+	reqHeadersBlob := compressJSON(requestHeaders)
+	respHeadersBlob := compressJSON(responseHeaders)
+	reqBodyBlob := compressText(truncateString(requestBody, constants.MaxLogRequestBodySize))
+	respBodyBlob := compressText(truncateString(responseBody, constants.MaxLogResponseBodySize))
 
-	// 存入 ring buffer
-	r.Value = log
-	s.accessLogs[userID] = r.Next()
+	_, _ = s.db.Exec(`
+		INSERT INTO access_logs
+			(user_id, api_key_id, api_key_name, api_key_prefix,
+			 method, path, client_ip, user_agent, model_name,
+			 timestamp, status_code, request_bytes, response_bytes,
+			 request_headers, request_body, response_headers, response_body,
+			 input_tokens, output_tokens, duration_ms)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		userID.String(), apiKeyID.String(), apiKeyName, apiKeyPrefix,
+		method, path, clientIP, userAgent, modelName,
+		time.Now().UTC(), statusCode, requestBytes, responseBytes,
+		reqHeadersBlob, reqBodyBlob, respHeadersBlob, respBodyBlob,
+		inputTokens, outputTokens, durationMs,
+	)
 }
 
 // truncateString 截断字符串到指定长度
@@ -221,75 +211,223 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "\n[truncated...]"
 }
 
-// GetRecentAccess 获取用户最近访问记录（按时间倒序）
-func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
-	s.logsMutex.RLock()
-	defer s.logsMutex.RUnlock()
+// compressJSON 将 map 序列化并 gzip 压缩
+func compressJSON(v map[string]string) []byte {
+	if len(v) == 0 {
+		return nil
+	}
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return gzipCompress(data)
+}
 
-	r, exists := s.accessLogs[userID]
-	if !exists {
+// compressText 将字符串 gzip 压缩
+func compressText(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return gzipCompress([]byte(s))
+}
+
+// gzipCompress 执行 gzip 压缩
+func gzipCompress(data []byte) []byte {
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(data); err != nil {
+		return data // fallback to raw
+	}
+	if err := w.Close(); err != nil {
+		return data
+	}
+	return buf.Bytes()
+}
+
+// gzipDecompress 执行 gzip 解压
+func gzipDecompress(data []byte) ([]byte, error) {
+	r, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		// 不是 gzip，当作原始数据
+		return data, nil
+	}
+	defer r.Close()
+	return io.ReadAll(r)
+}
+
+// decompressText 解压文本 blob
+func decompressText(blob []byte) string {
+	if len(blob) == 0 {
+		return ""
+	}
+	data, err := gzipDecompress(blob)
+	if err != nil {
+		return string(blob)
+	}
+	return string(data)
+}
+
+// decompressJSON 解压 JSON blob 为 map
+func decompressJSON(blob []byte) map[string]string {
+	if len(blob) == 0 {
+		return nil
+	}
+	data, err := gzipDecompress(blob)
+	if err != nil {
+		data = blob
+	}
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return nil
+	}
+	return m
+}
+
+// scanAccessLog 从 SQL 行扫描 AccessLog
+func scanAccessLog(rows *sql.Rows) (AccessLog, error) {
+	var log AccessLog
+	var userIDStr, apiKeyIDStr string
+	var reqHeadersBlob, reqBodyBlob, respHeadersBlob, respBodyBlob []byte
+	err := rows.Scan(
+		&log.ID,
+		&userIDStr, &apiKeyIDStr, &log.APIKeyName, &log.APIKeyPrefix,
+		&log.Method, &log.Path, &log.ClientIP, &log.UserAgent, &log.ModelName,
+		&log.Timestamp, &log.StatusCode, &log.RequestBytes, &log.ResponseBytes,
+		&reqHeadersBlob, &reqBodyBlob, &respHeadersBlob, &respBodyBlob,
+		&log.InputTokens, &log.OutputTokens, &log.DurationMs,
+	)
+	if err != nil {
+		return log, err
+	}
+	log.UserID, _ = uuid.Parse(userIDStr)
+	log.APIKeyID, _ = uuid.Parse(apiKeyIDStr)
+	log.RequestHeaders = decompressJSON(reqHeadersBlob)
+	log.RequestBody = decompressText(reqBodyBlob)
+	log.ResponseHeaders = decompressJSON(respHeadersBlob)
+	log.ResponseBody = decompressText(respBodyBlob)
+	return log, nil
+}
+
+const selectAccessLogCols = `
+	id,
+	user_id, api_key_id, api_key_name, api_key_prefix,
+	method, path, client_ip, user_agent, model_name,
+	timestamp, status_code, request_bytes, response_bytes,
+	request_headers, request_body, response_headers, response_body,
+	input_tokens, output_tokens, duration_ms
+`
+
+// GetRecentAccess 获取用户最近访问记录（按时间倒序）
+// limit <= 0 表示不限制条数
+func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
+	if s.db == nil {
 		return []AccessLog{}
 	}
-
-	// 限制最大条数
-	if limit > s.maxLogs {
-		limit = s.maxLogs
+	var (
+		rows *sql.Rows
+		err  error
+	)
+	if limit > 0 {
+		rows, err = s.db.Query(
+			`SELECT `+selectAccessLogCols+` FROM access_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?`,
+			userID.String(), limit,
+		)
+	} else {
+		rows, err = s.db.Query(
+			`SELECT `+selectAccessLogCols+` FROM access_logs WHERE user_id = ? ORDER BY timestamp DESC`,
+			userID.String(),
+		)
 	}
-	if limit <= 0 {
-		limit = s.maxLogs
+	if err != nil {
+		return []AccessLog{}
 	}
-
-	var logs []AccessLog
-	// 从当前位置开始遍历，收集所有非空条目
-	r.Do(func(p interface{}) {
-		if p != nil {
-			log := p.(AccessLog)
-			logs = append(logs, log)
-		}
-	})
-
-	// 按时间倒序排序（最新的在前），与 GetAllRecentAccess 保持一致
-	// 注意：不能用简单 reverse，因为 go 异步写入可能导致 ring buffer 中顺序不严格按时间排列
-	sort.SliceStable(logs, func(i, j int) bool {
-		return logs[i].Timestamp.After(logs[j].Timestamp)
-	})
-
-	// 限制返回条数
-	if len(logs) > limit {
-		logs = logs[:limit]
-	}
-
-	return logs
+	defer rows.Close()
+	return collectRows(rows)
 }
 
 // GetAllRecentAccess 获取所有用户最近的访问记录（按时间倒序）
 func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
-	s.logsMutex.RLock()
-	defer s.logsMutex.RUnlock()
+	if s.db == nil {
+		return []AccessLog{}
+	}
+	query := `SELECT ` + selectAccessLogCols + ` FROM access_logs ORDER BY timestamp DESC`
+	args := []interface{}{}
+	if limit > 0 {
+		query += ` LIMIT ?`
+		args = append(args, limit)
+	}
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return []AccessLog{}
+	}
+	defer rows.Close()
+	return collectRows(rows)
+}
 
-	var allLogs []AccessLog
+// GetAccessLogsByDates 获取指定日期集合内的访问记录（流式，通过回调处理）
+func (s *Service) GetAccessLogsByDates(dates []string, userID string, fn func(AccessLog) error) error {
+	if s.db == nil || len(dates) == 0 {
+		return nil
+	}
 
-	for _, r := range s.accessLogs {
-		if r == nil {
+	// Build IN clause
+	placeholders := make([]string, len(dates))
+	args := make([]interface{}, len(dates))
+	for i, d := range dates {
+		placeholders[i] = "DATE(timestamp) = ?"
+		args[i] = d
+	}
+
+	whereClause := "(" + joinStrings(placeholders, " OR ") + ")"
+	if userID != "" {
+		whereClause = "user_id = ? AND " + whereClause
+		args = append([]interface{}{userID}, args...)
+	}
+
+	rows, err := s.db.Query(
+		`SELECT `+selectAccessLogCols+` FROM access_logs WHERE `+whereClause+` ORDER BY timestamp ASC`,
+		args...,
+	)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		log, err := scanAccessLog(rows)
+		if err != nil {
 			continue
 		}
-		r.Do(func(p interface{}) {
-			if p != nil {
-				log := p.(AccessLog)
-				allLogs = append(allLogs, log)
-			}
-		})
+		if err := fn(log); err != nil {
+			return err
+		}
 	}
+	return rows.Err()
+}
 
-	// 按时间倒序排序（最新的在前）
-	sort.SliceStable(allLogs, func(i, j int) bool {
-		return allLogs[i].Timestamp.After(allLogs[j].Timestamp)
+func collectRows(rows *sql.Rows) []AccessLog {
+	var logs []AccessLog
+	for rows.Next() {
+		log, err := scanAccessLog(rows)
+		if err != nil {
+			continue
+		}
+		logs = append(logs, log)
+	}
+	// already sorted by DB, but ensure
+	sort.SliceStable(logs, func(i, j int) bool {
+		return logs[i].Timestamp.After(logs[j].Timestamp)
 	})
+	return logs
+}
 
-	// 限制返回条数
-	if limit > 0 && len(allLogs) > limit {
-		allLogs = allLogs[:limit]
+func joinStrings(ss []string, sep string) string {
+	result := ""
+	for i, s := range ss {
+		if i > 0 {
+			result += sep
+		}
+		result += s
 	}
-
-	return allLogs
+	return result
 }
