@@ -46,7 +46,7 @@ server {
            ┌───────────────┼───────────────┐
            │               │               │
       ┌────┴────┐     ┌────┴────┐     ┌────┴────┐
-      │Model Gate│     │Model Gate│     │Model Gate│
+      │Modelgate │     │Modelgate │     │Modelgate │
       │Instance1│     │Instance2│     │Instance3│
       └────┬────┘     └────┬────┘     └────┬────┘
            │               │               │

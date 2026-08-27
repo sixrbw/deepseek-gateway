@@ -59,58 +59,16 @@ const Login: React.FC = () => {
     }
   };
 
-  const extraContent = (
-    <>
-      <Title level={4} style={{ color: 'rgba(255,255,255,0.7)', fontWeight: 400, marginTop: '-10px' }}>
-        Model Gate
-      </Title>
-      <div style={{
-        display: 'flex',
-        gap: '12px',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
-        marginTop: '40px',
-      }}>
-        {['OpenAI 兼容', 'Anthropic 兼容', 'SSO 支持', '多后端'].map(tag => (
-          <span key={tag} style={{
-            padding: '6px 16px',
-            borderRadius: '20px',
-            background: 'rgba(255,255,255,0.08)',
-            border: '1px solid rgba(255,255,255,0.12)',
-            color: 'rgba(255,255,255,0.6)',
-            fontSize: '13px',
-            backdropFilter: 'blur(10px)',
-          }}>
-            {tag}
-          </span>
-        ))}
-      </div>
-    </>
-  );
-
   return (
     <AuthLayout 
-      title="模界" 
-      description={
-        <>
-          企业级大模型统一接入网关
-          <br />
-          多后端负载均衡 · 灵活配额管控(模型/用户/时间) · 审计追踪
-          <br />
-          让 AI 触手可及，使能工作效率倍增新时代
-        </>
-      }
-      extraContent={extraContent}
+      title="Modelgate"
     >
       {contextHolder}
       <div style={{ maxWidth: '420px', width: '100%', margin: '0 auto' }}>
         <div style={{ marginBottom: '40px' }}>
           <Title level={2} style={{ color: '#1f2937', marginBottom: '8px', fontWeight: 600 }}>
-            欢迎回来
+            登录
           </Title>
-          <Text style={{ color: '#6b7280', fontSize: '15px' }}>
-            登录以继续使用模型网关服务
-          </Text>
         </div>
 
         {ssoConfig.enabled && (
@@ -216,7 +174,7 @@ const Login: React.FC = () => {
           textAlign: 'center',
           width: '100%',
         }}>
-          <div>© {new Date().getFullYear()} 模界(Model Gate) · 企业大模型统一接入网关</div>
+          <div>© {new Date().getFullYear()} Modelgate</div>
           <div style={{ marginTop: '4px', opacity: 0.8, fontSize: '11px' }}>
             版本: {versionInfo?.version || 'N/A'} ({versionInfo?.commit?.substring(0, 7) || 'N/A'}) | 编译时间: {versionInfo?.build_time || 'N/A'}
           </div>

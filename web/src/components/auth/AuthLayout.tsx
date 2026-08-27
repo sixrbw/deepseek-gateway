@@ -7,7 +7,7 @@ const { Title, Paragraph } = Typography;
 interface AuthLayoutProps {
   children: React.ReactNode;
   title: string;
-  description: React.ReactNode;
+  description?: React.ReactNode;
   extraContent?: React.ReactNode;
 }
 
@@ -53,7 +53,7 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({ children, title, descrip
         <div style={{ position: 'relative', zIndex: 1, textAlign: 'center', maxWidth: '400px' }}>
           <img
             src={logo}
-            alt="Model Gate"
+            alt="Modelgate"
             style={{
               width: '180px',
               height: '60px',
@@ -64,14 +64,16 @@ export const AuthLayout: React.FC<AuthLayoutProps> = ({ children, title, descrip
           <Title level={2} style={{ color: '#fff', marginBottom: '16px', fontWeight: 600 }}>
             {title}
           </Title>
-          <Paragraph style={{
-            color: 'rgba(255,255,255,0.5)',
-            fontSize: '15px',
-            lineHeight: '1.8',
-            marginTop: '24px',
-          }}>
-            {description}
-          </Paragraph>
+          {description && (
+            <Paragraph style={{
+              color: 'rgba(255,255,255,0.5)',
+              fontSize: '15px',
+              lineHeight: '1.8',
+              marginTop: '24px',
+            }}>
+              {description}
+            </Paragraph>
+          )}
 
           {extraContent}
         </div>

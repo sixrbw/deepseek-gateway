@@ -1,9 +1,9 @@
-# 模界（Model Gate）- 企业大模型统一接入网关
+# Modelgate
 
 [![Go Version](https://img.shields.io/badge/Go-1.22+-blue.svg)](https://golang.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-模界（Model Gate）是一个为企业内部提供统一大模型服务入口的接入网关，实现用户管理、权限控制、配额计费、多后端负载均衡和审计追踪。
+Modelgate 是一个统一大模型接入网关，实现用户管理、权限控制、配额计费、多后端负载均衡和审计追踪。
 
 ## 核心功能
 
@@ -116,7 +116,7 @@ modelgate/
 
 ### 负载均衡策略
 
-模界（Model Gate）采用**权重轮询**算法进行负载均衡：
+Modelgate 采用**权重轮询**算法进行负载均衡：
 
 1. 根据后端 `weight` 值计算选择概率
 2. 优先选择健康（`healthy=true`）的后端
@@ -188,7 +188,7 @@ go test ./test/scenarios/... -cover
 4. **API Key 保护**：不要将 API Key 硬编码在客户端代码中
 5. **定期备份**：备份 SQLite 数据库文件
 6. **日志审计**：定期检查日志目录的访问记录
-7. **网络隔离**：LLM 后端服务应部署在内网，通过 Model Gate 统一暴露
+7. **网络隔离**：LLM 后端服务应部署在内网，通过 Modelgate 统一暴露
 8. **SSO 配置**：如启用 SSO，确保正确配置 issuer_url 和 client_secret
 
 ## 版本历史

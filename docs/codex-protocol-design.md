@@ -13,7 +13,7 @@
 
 ## 1. 背景与目标
 
-模界（Model Gate）网关目前支持两大标准 API 协议：
+Modelgate 网关目前支持两大标准 API 协议：
 1. **OpenAI ChatCompletions 协议** (`/v1/chat/completions`)
 2. **Anthropic Messages 协议** (`/v1/messages`)
 

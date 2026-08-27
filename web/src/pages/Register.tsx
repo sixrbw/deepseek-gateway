@@ -35,54 +35,10 @@ const Register: React.FC = () => {
     }
   };
 
-  const stepsList = (
-    <div style={{ marginTop: '48px', textAlign: 'left' }}>
-      {[
-        { step: '1', text: '填写注册信息' },
-        { step: '2', text: '等待管理员审核' },
-        { step: '3', text: '审核通过后登录使用' },
-      ].map(item => (
-        <div key={item.step} style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: '16px',
-          marginBottom: '20px',
-        }}>
-          <div style={{
-            width: '32px',
-            height: '32px',
-            borderRadius: '50%',
-            background: 'rgba(255,255,255,0.1)',
-            border: '1px solid rgba(255,255,255,0.2)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'rgba(255,255,255,0.7)',
-            fontSize: '14px',
-            fontWeight: 600,
-            flexShrink: 0,
-          }}>
-            {item.step}
-          </div>
-          <Text style={{ color: 'rgba(255,255,255,0.6)', fontSize: '14px' }}>
-            {item.text}
-          </Text>
-        </div>
-      ))}
-    </div>
-  );
-
   return (
     <AuthLayout
-      title="加入模界"
-      description={
-        <>
-          注册账号后需管理员审核
-          <br />
-          审核通过即可使用平台全部功能
-        </>
-      }
-      extraContent={stepsList}
+      title="Modelgate"
+      description="注册账号后需管理员审核"
     >
       {contextHolder}
       
