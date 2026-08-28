@@ -15,6 +15,9 @@ const UsageStats: React.FC = () => {
   const [accessLogs, setAccessLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // View filter state
+  const [viewRange, setViewRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+
   // Export state
   const [exportRange, setExportRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -23,12 +26,17 @@ const UsageStats: React.FC = () => {
     fetchData();
   }, []);
 
-  const fetchData = async () => {
+  const fetchData = async (range?: [Dayjs | null, Dayjs | null] | null) => {
+    const activeRange = range !== undefined ? range : viewRange;
+    let logsUrl = '/api/v1/user/access-logs?detailed=true&limit=1000';
+    if (activeRange && activeRange[0] && activeRange[1]) {
+      logsUrl += `&start_date=${activeRange[0].format('YYYY-MM-DD')}&end_date=${activeRange[1].format('YYYY-MM-DD')}`;
+    }
     try {
       const [quotaRes, usageRes, logsRes] = await Promise.all([
         api.get('/api/v1/user/quota'),
         api.get('/api/v1/user/usage'),
-        api.get('/api/v1/user/access-logs?detailed=true'),
+        api.get(logsUrl),
       ]);
 
       setQuota(quotaRes.data.data || {});
@@ -144,6 +152,24 @@ const UsageStats: React.FC = () => {
 
       {/* 最近访问记录 */}
       <Card title="最近访问记录" style={{ marginBottom: 24 }}>
+        <div style={{ marginBottom: 12 }}>
+          <Space>
+            <span>日期范围：</span>
+            <RangePicker
+              value={viewRange}
+              onChange={(val) => {
+                const newRange = val as [Dayjs | null, Dayjs | null] | null;
+                setViewRange(newRange);
+                fetchData(newRange);
+              }}
+              format="YYYY-MM-DD"
+              allowClear
+            />
+            <Button onClick={() => { setViewRange(null); fetchData(null); }} size="small">
+              显示全部
+            </Button>
+          </Space>
+        </div>
         <AccessLogsTable
           logs={accessLogs}
           loading={loading}

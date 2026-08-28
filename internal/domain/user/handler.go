@@ -484,10 +484,10 @@ func (h *Handler) GetAccessLogs(c *gin.Context) {
 	if hasRange {
 		logs = h.usageService.GetAccessLogsByDateRange(user.ID.String(), startDate, endDate, detailed)
 	} else {
-		limitStr := c.DefaultQuery("limit", "50")
+		limitStr := c.DefaultQuery("limit", "1000")
 		limit, err := strconv.Atoi(limitStr)
 		if err != nil || limit <= 0 {
-			limit = 50
+			limit = 1000
 		}
 		logs = h.usageService.GetRecentAccess(user.ID, limit)
 	}
@@ -519,10 +519,10 @@ func (h *Handler) GetAllAccessLogs(c *gin.Context) {
 	if hasRange {
 		logs = h.usageService.GetAllAccessLogsByDateRange(startDate, endDate, detailed)
 	} else {
-		limitStr := c.DefaultQuery("limit", "50")
+		limitStr := c.DefaultQuery("limit", "1000")
 		limit, err := strconv.Atoi(limitStr)
 		if err != nil || limit <= 0 {
-			limit = 50
+			limit = 1000
 		}
 		logs = h.usageService.GetAllRecentAccess(limit)
 	}

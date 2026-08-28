@@ -194,7 +194,13 @@ const AccessLogsTable: React.FC<AccessLogsTableProps> = ({
         columns={columns}
         rowKey={(record: any) => `${record.timestamp}-${record.path}-${record.user_id || record.client_ip}`}
         loading={loading}
-        pagination={false}
+        pagination={{
+          defaultPageSize: 50,
+          pageSizeOptions: ['20', '50', '100', '200'],
+          showSizeChanger: true,
+          showTotal: (total) => `共 ${total} 条`,
+          position: ['bottomRight'],
+        }}
         scroll={scroll}
         size="small"
       />
