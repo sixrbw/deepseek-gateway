@@ -90,10 +90,38 @@ CREATE TABLE IF NOT EXISTS quota_usage_daily (
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- 访问日志表（持久化，无条数上限）
+CREATE TABLE IF NOT EXISTS access_logs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     TEXT    NOT NULL,
+    api_key_id  TEXT    NOT NULL DEFAULT '',
+    api_key_name    TEXT NOT NULL DEFAULT '',
+    api_key_prefix  TEXT NOT NULL DEFAULT '',
+    method      TEXT    NOT NULL DEFAULT '',
+    path        TEXT    NOT NULL DEFAULT '',
+    client_ip   TEXT    NOT NULL DEFAULT '',
+    user_agent  TEXT    NOT NULL DEFAULT '',
+    model_name  TEXT    NOT NULL DEFAULT '',
+    timestamp   DATETIME NOT NULL,
+    status_code INTEGER NOT NULL DEFAULT 0,
+    request_bytes  INTEGER NOT NULL DEFAULT 0,
+    response_bytes INTEGER NOT NULL DEFAULT 0,
+    request_headers  BLOB,
+    request_body     BLOB,
+    response_headers BLOB,
+    response_body    BLOB,
+    input_tokens  INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    duration_ms   INTEGER NOT NULL DEFAULT 0
+);
+
 -- 创建索引
 CREATE INDEX IF NOT EXISTS idx_api_keys_user_id ON api_keys(user_id);
 CREATE INDEX IF NOT EXISTS idx_quota_usage_user_id ON quota_usage_daily(user_id);
 CREATE INDEX IF NOT EXISTS idx_quota_usage_date ON quota_usage_daily(date);
+CREATE INDEX IF NOT EXISTS idx_access_logs_user_ts ON access_logs(user_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_access_logs_model ON access_logs(model_name);
 
 -- 访问日志主表（轻量元数据，长期保留）
 CREATE TABLE IF NOT EXISTS access_logs (

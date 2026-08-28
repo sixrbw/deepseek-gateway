@@ -319,3 +319,44 @@ func truncateString(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "\n[truncated...]"
 }
+
+// GetAccessLogsByDates 按多个具体日期（YYYY-MM-DD）流式迭代访问日志
+// 对每条记录调用 fn；若 fn 返回错误则中止迭代。
+func (s *Service) GetAccessLogsByDates(dates []string, userID string, fn func(AccessLog) error) error {
+	if s.logStore == nil || len(dates) == 0 {
+		return nil
+	}
+	for _, d := range dates {
+		start, err := time.Parse("2006-01-02", d)
+		if err != nil {
+			continue
+		}
+		end := start.Add(24 * time.Hour)
+		rows, err := s.logStore.List(entity.QueryOptions{
+			UserID:    userID,
+			StartTime: start.UTC(),
+			EndTime:   end.UTC(),
+		})
+		if err != nil {
+			return err
+		}
+		for _, r := range rows {
+			log := rowToAccessLog(r)
+			if r.HasPayload {
+				payload, _ := s.logStore.GetPayload(r.ID)
+				if payload != nil {
+					log.RequestHeaders = payload.RequestHeaders
+					log.RequestBody = payload.RequestBody
+					log.ResponseHeaders = payload.ResponseHeaders
+					log.ResponseBody = payload.ResponseBody
+				} else {
+					log.PayloadExpired = true
+				}
+			}
+			if err := fn(log); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

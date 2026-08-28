@@ -187,3 +187,41 @@ func TestGetAccessLogsByDateRange(t *testing.T) {
 	logs := service.GetAccessLogsByDateRange(userID.String(), start, end, false)
 	assert.Equal(t, 1, len(logs))
 }
+
+func TestGetAccessLogsByDates(t *testing.T) {
+	service := newTestService(t)
+	userID := uuid.New()
+
+	// 记录两条日志（均在 "today"，将通过日期过滤）
+	service.RecordAccess(userID, "GET", "/path-a", "1.2.3.4", "Agent", "gpt-4", 200, 100, 200, 10)
+	service.RecordAccess(userID, "POST", "/path-b", "1.2.3.4", "Agent", "gpt-4", 200, 500, 1000, 30)
+
+	today := time.Now().Format("2006-01-02")
+	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+
+	var collected []AccessLog
+	err := service.GetAccessLogsByDates([]string{today}, userID.String(), func(l AccessLog) error {
+		collected = append(collected, l)
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(collected), "今天的日志应该返回2条")
+
+	// 昨天应返回0条
+	var yesterday0 []AccessLog
+	err = service.GetAccessLogsByDates([]string{yesterday}, userID.String(), func(l AccessLog) error {
+		yesterday0 = append(yesterday0, l)
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 0, len(yesterday0), "昨天应该没有日志")
+
+	// 两天选择，结果只来自今天
+	var multi []AccessLog
+	err = service.GetAccessLogsByDates([]string{yesterday, today}, userID.String(), func(l AccessLog) error {
+		multi = append(multi, l)
+		return nil
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 2, len(multi), "多日期时只有今天的2条")
+}
