@@ -56,10 +56,11 @@ type JWTConfig struct {
 }
 
 type LogConfig struct {
-	Path          string `yaml:"path"`
-	RetentionDays int    `yaml:"retention_days" validate:"min=0"`
-	LogPayloads   bool   `yaml:"log_payloads"`
-	RawDumps      string `yaml:"raw_dumps" validate:"oneof=none error full"`
+	Path                 string `yaml:"path"`
+	RetentionDays        int    `yaml:"retention_days" validate:"min=0"`
+	LogPayloads          bool   `yaml:"log_payloads"`
+	RawDumps             string `yaml:"raw_dumps" validate:"oneof=none error full"`
+	PayloadRetentionDays int    `yaml:"payload_retention_days" validate:"min=0"` // 完整 payload 保留天数，默认 7
 }
 
 type FIMConfig struct {
@@ -233,6 +234,9 @@ func setDefaults(cfg *Config) {
 	}
 	if cfg.Logs.RawDumps == "" {
 		cfg.Logs.RawDumps = "none"
+	}
+	if cfg.Logs.PayloadRetentionDays == 0 {
+		cfg.Logs.PayloadRetentionDays = 7
 	}
 	if cfg.SSO.Enabled && cfg.SSO.EmailClaim == "" {
 		cfg.SSO.EmailClaim = "email"

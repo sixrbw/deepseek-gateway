@@ -123,6 +123,45 @@ CREATE INDEX IF NOT EXISTS idx_access_logs_user_ts ON access_logs(user_id, times
 CREATE INDEX IF NOT EXISTS idx_access_logs_ts ON access_logs(timestamp);
 CREATE INDEX IF NOT EXISTS idx_access_logs_model ON access_logs(model_name);
 
+-- 访问日志主表（轻量元数据，长期保留）
+CREATE TABLE IF NOT EXISTS access_logs (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    api_key_id TEXT NOT NULL DEFAULT '',
+    api_key_name TEXT NOT NULL DEFAULT '',
+    api_key_prefix TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT '',
+    path TEXT NOT NULL DEFAULT '',
+    client_ip TEXT NOT NULL DEFAULT '',
+    user_agent TEXT NOT NULL DEFAULT '',
+    model_name TEXT NOT NULL DEFAULT '',
+    timestamp DATETIME NOT NULL,
+    status_code INTEGER NOT NULL DEFAULT 0,
+    request_bytes INTEGER NOT NULL DEFAULT 0,
+    response_bytes INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    has_payload INTEGER NOT NULL DEFAULT 0
+);
+
+-- 访问日志 payload 表（gzip 压缩的 headers/body，保留 7 天）
+CREATE TABLE IF NOT EXISTS access_log_payloads (
+    access_log_id TEXT PRIMARY KEY,
+    request_headers_gz BLOB,
+    request_body_gz BLOB,
+    response_headers_gz BLOB,
+    response_body_gz BLOB,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (access_log_id) REFERENCES access_logs(id) ON DELETE CASCADE
+);
+
+-- 索引
+CREATE INDEX IF NOT EXISTS idx_access_logs_user_id ON access_logs(user_id);
+CREATE INDEX IF NOT EXISTS idx_access_logs_timestamp ON access_logs(timestamp);
+CREATE INDEX IF NOT EXISTS idx_access_logs_user_timestamp ON access_logs(user_id, timestamp);
+CREATE INDEX IF NOT EXISTS idx_access_log_payloads_created_at ON access_log_payloads(created_at);
+
 -- 注意：以下表已弃用，配置数据现在存储在 config.yaml 中
 -- 保留这些注释以便于理解数据库演进历史
 -- DEPRECATED: models 表 -> 迁移到 config.yaml

@@ -1,23 +1,17 @@
 package usage
 
 import (
-	"bytes"
-	"compress/gzip"
-	"database/sql"
-	"encoding/json"
-	"io"
-	"sort"
 	"time"
 
 	"github.com/google/uuid"
 	"modelgate/internal/infra/constants"
 	"modelgate/internal/infra/logger"
 	"modelgate/internal/infra/utils"
+	entity "modelgate/internal/repository"
 )
 
-// AccessLog 访问日志结构
+// AccessLog 访问日志结构（用于 API 响应）
 type AccessLog struct {
-	ID              int64             `json:"id"`
 	UserID          uuid.UUID         `json:"user_id"`
 	APIKeyID        uuid.UUID         `json:"api_key_id"`
 	APIKeyName      string            `json:"api_key_name"`
@@ -31,13 +25,15 @@ type AccessLog struct {
 	StatusCode      int               `json:"status_code"`
 	RequestBytes    int64             `json:"request_bytes"`
 	ResponseBytes   int64             `json:"response_bytes"`
-	RequestHeaders  map[string]string `json:"request_headers"`
-	RequestBody     string            `json:"request_body"`
-	ResponseHeaders map[string]string `json:"response_headers"`
-	ResponseBody    string            `json:"response_body"`
+	RequestHeaders  map[string]string `json:"request_headers,omitempty"`
+	RequestBody     string            `json:"request_body,omitempty"`
+	ResponseHeaders map[string]string `json:"response_headers,omitempty"`
+	ResponseBody    string            `json:"response_body,omitempty"`
 	InputTokens     int               `json:"input_tokens"`
 	OutputTokens    int               `json:"output_tokens"`
 	DurationMs      int64             `json:"duration_ms"`
+	// PayloadExpired 为 true 时表示 payload 已超过保留期被清理
+	PayloadExpired bool `json:"payload_expired,omitempty"`
 }
 
 // SimpleAccessLog 简化版的访问日志（用于列表显示）
@@ -75,10 +71,33 @@ func (log *AccessLog) ToSimple() SimpleAccessLog {
 	}
 }
 
-// Service 使用记录服务
-type Service struct {
-	logger *logger.UserLogger
-	db     *sql.DB
+// rowToAccessLog 将 AccessLogRow 转为 AccessLog（不含 payload）
+func rowToAccessLog(r entity.AccessLogRow) AccessLog {
+	uid, _ := uuid.Parse(r.UserID)
+	akid, _ := uuid.Parse(r.APIKeyID)
+	log := AccessLog{
+		UserID:        uid,
+		APIKeyID:      akid,
+		APIKeyName:    r.APIKeyName,
+		APIKeyPrefix:  r.APIKeyPrefix,
+		Method:        r.Method,
+		Path:          r.Path,
+		ClientIP:      r.ClientIP,
+		UserAgent:     r.UserAgent,
+		ModelName:     r.ModelName,
+		Timestamp:     r.Timestamp,
+		StatusCode:    r.StatusCode,
+		RequestBytes:  r.RequestBytes,
+		ResponseBytes: r.ResponseBytes,
+		InputTokens:   r.InputTokens,
+		OutputTokens:  r.OutputTokens,
+		DurationMs:    r.DurationMs,
+	}
+	// 若原本有 payload 但 has_payload=false，说明已被清理
+	if !r.HasPayload {
+		log.PayloadExpired = false // has_payload=0 可能根本没有过 payload（老数据迁移兼容），不标记
+	}
+	return log
 }
 
 // Record 使用记录
@@ -101,22 +120,28 @@ type Record struct {
 	TTFTMs          int64
 }
 
-// NewService 创建使用记录服务（内存模式，向后兼容）
+// Service 使用记录服务
+type Service struct {
+	logger   *logger.UserLogger
+	logStore *entity.AccessLogStore
+}
+
+// NewService 创建使用记录服务（无 SQLite 依赖，保持向后兼容）
 func NewService(logger *logger.UserLogger) *Service {
 	return &Service{
 		logger: logger,
 	}
 }
 
-// NewServiceWithDB 创建带数据库持久化的使用记录服务
-func NewServiceWithDB(logger *logger.UserLogger, db *sql.DB) *Service {
+// NewServiceWithStore 创建使用记录服务（带 SQLite 日志存储）
+func NewServiceWithStore(lg *logger.UserLogger, logStore *entity.AccessLogStore) *Service {
 	return &Service{
-		logger: logger,
-		db:     db,
+		logger:   lg,
+		logStore: logStore,
 	}
 }
 
-// RecordUsageDetailed 记录详细的使用信息（写文件日志）
+// RecordUsageDetailed 记录详细的使用信息
 func (s *Service) RecordUsageDetailed(record *Record) {
 	s.logger.LogUsageWithDetails(record.UserID.String(), logger.UsageLogEntry{
 		Time:            time.Now().Format(time.RFC3339),
@@ -138,9 +163,18 @@ func (s *Service) RecordUsageDetailed(record *Record) {
 	})
 }
 
-// CleanupOldRecords 清理旧记录（由 logger 自动处理）
+// CleanupOldRecords 清理旧记录
 func (s *Service) CleanupOldRecords() error {
 	return s.logger.CleanupOldLogs()
+}
+
+// CleanupOldPayloads 清理超过保留期的 payload（由后台任务定期调用）
+func (s *Service) CleanupOldPayloads(retentionDays int) (int64, error) {
+	if s.logStore == nil {
+		return 0, nil
+	}
+	cutoff := time.Now().UTC().AddDate(0, 0, -retentionDays)
+	return s.logStore.DeleteOldPayloads(cutoff)
 }
 
 // GetUsageStats 获取使用统计
@@ -153,10 +187,10 @@ func (s *Service) GetUsageStats(userID string, startDate, endDate time.Time) (ma
 	}, nil
 }
 
-// Flush 保留以兼容旧代码
+// Flush 刷新日志（兼容旧代码）
 func (s *Service) Flush() {}
 
-// RecordAccess 记录用户访问日志（简单版）
+// RecordAccess 记录用户访问日志（简化版）
 func (s *Service) RecordAccess(userID uuid.UUID, method, path, clientIP, userAgent string, modelName string, statusCode int, requestBytes, responseBytes int64, durationMs int64) {
 	s.RecordAccessDetailed(userID, uuid.Nil, "", "", method, path, clientIP, userAgent, modelName, statusCode, requestBytes, responseBytes, nil, "", nil, "", 0, 0, durationMs)
 }
@@ -178,29 +212,104 @@ func (s *Service) RecordAccessDetailed(
 	outputTokens int,
 	durationMs int64,
 ) {
-	if s.db == nil {
+	if s.logStore == nil {
 		return
 	}
 
-	reqHeadersBlob := compressJSON(requestHeaders)
-	respHeadersBlob := compressJSON(responseHeaders)
-	reqBodyBlob := compressText(truncateString(requestBody, constants.MaxLogRequestBodySize))
-	respBodyBlob := compressText(truncateString(responseBody, constants.MaxLogResponseBodySize))
+	// 截断大内容
+	requestBody = truncateString(requestBody, constants.MaxLogRequestBodySize)
+	responseBody = truncateString(responseBody, constants.MaxLogResponseBodySize)
 
-	_, _ = s.db.Exec(`
-		INSERT INTO access_logs
-			(user_id, api_key_id, api_key_name, api_key_prefix,
-			 method, path, client_ip, user_agent, model_name,
-			 timestamp, status_code, request_bytes, response_bytes,
-			 request_headers, request_body, response_headers, response_body,
-			 input_tokens, output_tokens, duration_ms)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		userID.String(), apiKeyID.String(), apiKeyName, apiKeyPrefix,
+	if err := s.logStore.Insert(
+		userID, apiKeyID, apiKeyName, apiKeyPrefix,
 		method, path, clientIP, userAgent, modelName,
-		time.Now().UTC(), statusCode, requestBytes, responseBytes,
-		reqHeadersBlob, reqBodyBlob, respHeadersBlob, respBodyBlob,
+		statusCode, requestBytes, responseBytes,
+		requestHeaders, requestBody, responseHeaders, responseBody,
 		inputTokens, outputTokens, durationMs,
-	)
+	); err != nil {
+		// 非致命错误，仅记录
+		_ = err
+	}
+}
+
+// GetRecentAccess 获取用户最近访问记录（按时间倒序）
+func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.logStore.List(entity.QueryOptions{
+		UserID: userID.String(),
+		Limit:  limit,
+	})
+	if err != nil {
+		return []AccessLog{}
+	}
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, rowToAccessLog(r))
+	}
+	return logs
+}
+
+// GetAllRecentAccess 获取所有用户最近的访问记录（按时间倒序）
+func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	rows, err := s.logStore.List(entity.QueryOptions{Limit: limit})
+	if err != nil {
+		return []AccessLog{}
+	}
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		logs = append(logs, rowToAccessLog(r))
+	}
+	return logs
+}
+
+// GetAccessLogsByDateRange 获取指定时间范围内的访问记录（含 payload，若已过期则标记）
+func (s *Service) GetAccessLogsByDateRange(userID string, start, end time.Time, withPayload bool) []AccessLog {
+	if s.logStore == nil {
+		return []AccessLog{}
+	}
+	opts := entity.QueryOptions{
+		UserID:    userID,
+		StartTime: start,
+		EndTime:   end,
+	}
+	rows, err := s.logStore.List(opts)
+	if err != nil {
+		return []AccessLog{}
+	}
+
+	logs := make([]AccessLog, 0, len(rows))
+	for _, r := range rows {
+		log := rowToAccessLog(r)
+		if withPayload && r.HasPayload {
+			payload, _ := s.logStore.GetPayload(r.ID)
+			if payload != nil {
+				log.RequestHeaders = payload.RequestHeaders
+				log.RequestBody = payload.RequestBody
+				log.ResponseHeaders = payload.ResponseHeaders
+				log.ResponseBody = payload.ResponseBody
+			} else {
+				// payload 已被清理
+				log.PayloadExpired = true
+			}
+		} else if r.HasPayload && !withPayload {
+			// 不需要 payload，不标记
+		}
+		logs = append(logs, log)
+	}
+	return logs
+}
+
+// GetAllAccessLogsByDateRange 获取所有用户指定时间范围内的访问记录
+func (s *Service) GetAllAccessLogsByDateRange(start, end time.Time, withPayload bool) []AccessLog {
+	return s.GetAccessLogsByDateRange("", start, end, withPayload)
 }
 
 // truncateString 截断字符串到指定长度
@@ -211,223 +320,43 @@ func truncateString(s string, maxLen int) string {
 	return s[:maxLen] + "\n[truncated...]"
 }
 
-// compressJSON 将 map 序列化并 gzip 压缩
-func compressJSON(v map[string]string) []byte {
-	if len(v) == 0 {
-		return nil
-	}
-	data, err := json.Marshal(v)
-	if err != nil {
-		return nil
-	}
-	return gzipCompress(data)
-}
-
-// compressText 将字符串 gzip 压缩
-func compressText(s string) []byte {
-	if s == "" {
-		return nil
-	}
-	return gzipCompress([]byte(s))
-}
-
-// gzipCompress 执行 gzip 压缩
-func gzipCompress(data []byte) []byte {
-	var buf bytes.Buffer
-	w := gzip.NewWriter(&buf)
-	if _, err := w.Write(data); err != nil {
-		return data // fallback to raw
-	}
-	if err := w.Close(); err != nil {
-		return data
-	}
-	return buf.Bytes()
-}
-
-// gzipDecompress 执行 gzip 解压
-func gzipDecompress(data []byte) ([]byte, error) {
-	r, err := gzip.NewReader(bytes.NewReader(data))
-	if err != nil {
-		// 不是 gzip，当作原始数据
-		return data, nil
-	}
-	defer r.Close()
-	return io.ReadAll(r)
-}
-
-// decompressText 解压文本 blob
-func decompressText(blob []byte) string {
-	if len(blob) == 0 {
-		return ""
-	}
-	data, err := gzipDecompress(blob)
-	if err != nil {
-		return string(blob)
-	}
-	return string(data)
-}
-
-// decompressJSON 解压 JSON blob 为 map
-func decompressJSON(blob []byte) map[string]string {
-	if len(blob) == 0 {
-		return nil
-	}
-	data, err := gzipDecompress(blob)
-	if err != nil {
-		data = blob
-	}
-	var m map[string]string
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil
-	}
-	return m
-}
-
-// scanAccessLog 从 SQL 行扫描 AccessLog
-func scanAccessLog(rows *sql.Rows) (AccessLog, error) {
-	var log AccessLog
-	var userIDStr, apiKeyIDStr string
-	var reqHeadersBlob, reqBodyBlob, respHeadersBlob, respBodyBlob []byte
-	err := rows.Scan(
-		&log.ID,
-		&userIDStr, &apiKeyIDStr, &log.APIKeyName, &log.APIKeyPrefix,
-		&log.Method, &log.Path, &log.ClientIP, &log.UserAgent, &log.ModelName,
-		&log.Timestamp, &log.StatusCode, &log.RequestBytes, &log.ResponseBytes,
-		&reqHeadersBlob, &reqBodyBlob, &respHeadersBlob, &respBodyBlob,
-		&log.InputTokens, &log.OutputTokens, &log.DurationMs,
-	)
-	if err != nil {
-		return log, err
-	}
-	log.UserID, _ = uuid.Parse(userIDStr)
-	log.APIKeyID, _ = uuid.Parse(apiKeyIDStr)
-	log.RequestHeaders = decompressJSON(reqHeadersBlob)
-	log.RequestBody = decompressText(reqBodyBlob)
-	log.ResponseHeaders = decompressJSON(respHeadersBlob)
-	log.ResponseBody = decompressText(respBodyBlob)
-	return log, nil
-}
-
-const selectAccessLogCols = `
-	id,
-	user_id, api_key_id, api_key_name, api_key_prefix,
-	method, path, client_ip, user_agent, model_name,
-	timestamp, status_code, request_bytes, response_bytes,
-	request_headers, request_body, response_headers, response_body,
-	input_tokens, output_tokens, duration_ms
-`
-
-// GetRecentAccess 获取用户最近访问记录（按时间倒序）
-// limit <= 0 表示不限制条数
-func (s *Service) GetRecentAccess(userID uuid.UUID, limit int) []AccessLog {
-	if s.db == nil {
-		return []AccessLog{}
-	}
-	var (
-		rows *sql.Rows
-		err  error
-	)
-	if limit > 0 {
-		rows, err = s.db.Query(
-			`SELECT `+selectAccessLogCols+` FROM access_logs WHERE user_id = ? ORDER BY timestamp DESC LIMIT ?`,
-			userID.String(), limit,
-		)
-	} else {
-		rows, err = s.db.Query(
-			`SELECT `+selectAccessLogCols+` FROM access_logs WHERE user_id = ? ORDER BY timestamp DESC`,
-			userID.String(),
-		)
-	}
-	if err != nil {
-		return []AccessLog{}
-	}
-	defer rows.Close()
-	return collectRows(rows)
-}
-
-// GetAllRecentAccess 获取所有用户最近的访问记录（按时间倒序）
-func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
-	if s.db == nil {
-		return []AccessLog{}
-	}
-	query := `SELECT ` + selectAccessLogCols + ` FROM access_logs ORDER BY timestamp DESC`
-	args := []interface{}{}
-	if limit > 0 {
-		query += ` LIMIT ?`
-		args = append(args, limit)
-	}
-	rows, err := s.db.Query(query, args...)
-	if err != nil {
-		return []AccessLog{}
-	}
-	defer rows.Close()
-	return collectRows(rows)
-}
-
-// GetAccessLogsByDates 获取指定日期集合内的访问记录（流式，通过回调处理）
+// GetAccessLogsByDates 按多个具体日期（YYYY-MM-DD）流式迭代访问日志
+// 对每条记录调用 fn；若 fn 返回错误则中止迭代。
 func (s *Service) GetAccessLogsByDates(dates []string, userID string, fn func(AccessLog) error) error {
-	if s.db == nil || len(dates) == 0 {
+	if s.logStore == nil || len(dates) == 0 {
 		return nil
 	}
-
-	// Build IN clause
-	placeholders := make([]string, len(dates))
-	args := make([]interface{}, len(dates))
-	for i, d := range dates {
-		placeholders[i] = "DATE(timestamp) = ?"
-		args[i] = d
-	}
-
-	whereClause := "(" + joinStrings(placeholders, " OR ") + ")"
-	if userID != "" {
-		whereClause = "user_id = ? AND " + whereClause
-		args = append([]interface{}{userID}, args...)
-	}
-
-	rows, err := s.db.Query(
-		`SELECT `+selectAccessLogCols+` FROM access_logs WHERE `+whereClause+` ORDER BY timestamp ASC`,
-		args...,
-	)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		log, err := scanAccessLog(rows)
+	for _, d := range dates {
+		start, err := time.Parse("2006-01-02", d)
 		if err != nil {
 			continue
 		}
-		if err := fn(log); err != nil {
+		end := start.Add(24 * time.Hour)
+		rows, err := s.logStore.List(entity.QueryOptions{
+			UserID:    userID,
+			StartTime: start.UTC(),
+			EndTime:   end.UTC(),
+		})
+		if err != nil {
 			return err
 		}
-	}
-	return rows.Err()
-}
-
-func collectRows(rows *sql.Rows) []AccessLog {
-	var logs []AccessLog
-	for rows.Next() {
-		log, err := scanAccessLog(rows)
-		if err != nil {
-			continue
+		for _, r := range rows {
+			log := rowToAccessLog(r)
+			if r.HasPayload {
+				payload, _ := s.logStore.GetPayload(r.ID)
+				if payload != nil {
+					log.RequestHeaders = payload.RequestHeaders
+					log.RequestBody = payload.RequestBody
+					log.ResponseHeaders = payload.ResponseHeaders
+					log.ResponseBody = payload.ResponseBody
+				} else {
+					log.PayloadExpired = true
+				}
+			}
+			if err := fn(log); err != nil {
+				return err
+			}
 		}
-		logs = append(logs, log)
 	}
-	// already sorted by DB, but ensure
-	sort.SliceStable(logs, func(i, j int) bool {
-		return logs[i].Timestamp.After(logs[j].Timestamp)
-	})
-	return logs
-}
-
-func joinStrings(ss []string, sep string) string {
-	result := ""
-	for i, s := range ss {
-		if i > 0 {
-			result += sep
-		}
-		result += s
-	}
-	return result
+	return nil
 }
