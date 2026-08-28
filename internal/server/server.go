@@ -149,7 +149,7 @@ func (s *Server) initServices() {
 	s.apiKeyService = apikey.NewService(s.apiKeyStore, s.userStore, s.localCache)
 	s.dashboardService = dashboard.NewService(s.db.DB)
 	s.quotaService = quota.NewService(s.quotaStore, s.modelStore, s.apiKeyStore, s.dashboardService)
-	s.usageService = usage.NewService(s.userLogger)
+	s.usageService = usage.NewServiceWithStore(s.userLogger, entity.NewAccessLogStore(s.db.DB))
 
 	// Proxy
 	s.lb = proxy.NewRoundRobinBalancer()
@@ -260,6 +260,16 @@ func (s *Server) cleanupTask() {
 		log.Println("Running cleanup task...")
 		if err := s.usageService.CleanupOldRecords(); err != nil {
 			log.Printf("Cleanup error: %v", err)
+		}
+		retentionDays := s.cfgManager.GetConfig().Logs.PayloadRetentionDays
+		if retentionDays <= 0 {
+			retentionDays = 7
+		}
+		deleted, err := s.usageService.CleanupOldPayloads(retentionDays)
+		if err != nil {
+			log.Printf("Payload cleanup error: %v", err)
+		} else if deleted > 0 {
+			log.Printf("Cleaned up %d expired payload records (retention: %d days)", deleted, retentionDays)
 		}
 	}
 }
