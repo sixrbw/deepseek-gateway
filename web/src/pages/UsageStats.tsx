@@ -59,36 +59,25 @@ const UsageStats: React.FC = () => {
       return;
     }
 
-    // Expand range into individual dates
-    const dates: string[] = [];
-    let cur = exportRange[0].clone();
-    const end = exportRange[1];
-    while (cur.isBefore(end, 'day') || cur.isSame(end, 'day')) {
-      dates.push(cur.format('YYYY-MM-DD'));
-      cur = cur.add(1, 'day');
-    }
-
-    if (dates.length === 0) {
-      message.warning('日期范围为空，请重新选择');
-      return;
-    }
+    const startDate = exportRange[0].format('YYYY-MM-DD');
+    const endDate = exportRange[1].format('YYYY-MM-DD');
 
     setExporting(true);
     try {
       const resp = await api.get('/api/v1/admin/access-logs/export-by-dates', {
-        params: { dates: dates.join(',') },
+        params: { start_date: startDate, end_date: endDate },
         responseType: 'blob',
       });
       const blob = new Blob([resp.data], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `access-logs-${dates[0]}-${dates[dates.length - 1]}.csv`;
+      link.download = `access-logs-${startDate}-${endDate}.csv`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
       URL.revokeObjectURL(url);
-      message.success(`成功导出 ${dates.length} 天的访问日志`);
+      message.success('成功导出所选日期范围访问日志');
     } catch {
       message.error('导出失败，请检查权限或网络后重试');
     } finally {
@@ -175,7 +164,7 @@ const UsageStats: React.FC = () => {
             />
           </div>
           <div style={{ color: '#999', fontSize: 12 }}>
-            所选范围内的每一天都会被导出为 CSV 文件（含请求/响应详情）。仅管理员可导出。
+            将导出所选日期范围内的全部访问日志（含请求/响应详情）。仅管理员可导出。
           </div>
           <Button
             type="primary"

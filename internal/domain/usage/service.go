@@ -272,6 +272,11 @@ func (s *Service) GetAllRecentAccess(limit int) []AccessLog {
 
 // GetAccessLogsByDateRange 获取指定时间范围内的访问记录（含 payload，若已过期则标记）
 func (s *Service) GetAccessLogsByDateRange(userID string, start, end time.Time, withPayload bool) []AccessLog {
+	return s.GetAccessLogsByDateRangeLimited(userID, start, end, withPayload, 0)
+}
+
+// GetAccessLogsByDateRangeLimited 获取指定时间范围内的访问记录，并支持结果行数上限（limit<=0 表示不限制）
+func (s *Service) GetAccessLogsByDateRangeLimited(userID string, start, end time.Time, withPayload bool, limit int) []AccessLog {
 	if s.logStore == nil {
 		return []AccessLog{}
 	}
@@ -279,6 +284,9 @@ func (s *Service) GetAccessLogsByDateRange(userID string, start, end time.Time, 
 		UserID:    userID,
 		StartTime: start,
 		EndTime:   end,
+	}
+	if limit > 0 {
+		opts.Limit = limit
 	}
 	rows, err := s.logStore.List(opts)
 	if err != nil {
@@ -310,6 +318,11 @@ func (s *Service) GetAccessLogsByDateRange(userID string, start, end time.Time, 
 // GetAllAccessLogsByDateRange 获取所有用户指定时间范围内的访问记录
 func (s *Service) GetAllAccessLogsByDateRange(start, end time.Time, withPayload bool) []AccessLog {
 	return s.GetAccessLogsByDateRange("", start, end, withPayload)
+}
+
+// GetAllAccessLogsByDateRangeLimited 获取所有用户指定时间范围内的访问记录，并支持结果行数上限（limit<=0 表示不限制）
+func (s *Service) GetAllAccessLogsByDateRangeLimited(start, end time.Time, withPayload bool, limit int) []AccessLog {
+	return s.GetAccessLogsByDateRangeLimited("", start, end, withPayload, limit)
 }
 
 // truncateString 截断字符串到指定长度

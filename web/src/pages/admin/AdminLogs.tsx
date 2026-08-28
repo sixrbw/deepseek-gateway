@@ -1,14 +1,18 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Button, message } from 'antd';
+import { Button, message, DatePicker, Space } from 'antd';
 import { SyncOutlined, DownloadOutlined } from '@ant-design/icons';
+import type { Dayjs } from 'dayjs';
 import api from '../../api';
 import AccessLogsTable from '../../components/AccessLogsTable';
+
+const { RangePicker } = DatePicker;
 
 const AdminLogs: React.FC = () => {
   const [accessLogs, setAccessLogs] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportRange, setExportRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -39,16 +43,22 @@ const AdminLogs: React.FC = () => {
   }, [users]);
 
   const handleExport = async () => {
+    if (!exportRange || !exportRange[0] || !exportRange[1]) {
+      message.warning('请先选择导出的日期范围');
+      return;
+    }
+    const startDate = exportRange[0].format('YYYY-MM-DD');
+    const endDate = exportRange[1].format('YYYY-MM-DD');
     setExporting(true);
     try {
       const response = await api.get('/api/v1/admin/access-logs/export', {
+        params: { start_date: startDate, end_date: endDate },
         responseType: 'blob',
       });
-      const dateStr = new Date().toISOString().slice(0, 10).replace(/-/g, '');
       const url = window.URL.createObjectURL(new Blob([response.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', `token-logs-${dateStr}.zip`);
+      link.setAttribute('download', `token-logs-${startDate}-${endDate}.zip`);
       document.body.appendChild(link);
       link.click();
       link.parentNode?.removeChild(link);
@@ -63,17 +73,28 @@ const AdminLogs: React.FC = () => {
 
   return (
     <>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-        <Button
-          icon={<DownloadOutlined />}
-          onClick={handleExport}
-          loading={exporting}
-        >
-          导出（按 Token）
-        </Button>
-        <Button icon={<SyncOutlined />} onClick={fetchData} loading={loading}>
-          刷新
-        </Button>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+        <Space size="small">
+          <span>导出日期范围：</span>
+          <RangePicker
+            onChange={(val) => setExportRange(val as [Dayjs | null, Dayjs | null] | null)}
+            format="YYYY-MM-DD"
+            allowClear
+          />
+        </Space>
+        <Space size="small">
+          <Button
+            icon={<DownloadOutlined />}
+            onClick={handleExport}
+            loading={exporting}
+            disabled={!exportRange || !exportRange[0] || !exportRange[1]}
+          >
+            导出（按 Token）
+          </Button>
+          <Button icon={<SyncOutlined />} onClick={fetchData} loading={loading}>
+            刷新
+          </Button>
+        </Space>
       </div>
       <AccessLogsTable 
         logs={accessLogs} 

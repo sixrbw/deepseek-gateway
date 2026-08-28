@@ -11,7 +11,7 @@ const UserTab: React.FC = () => {
   const [loading, setLoading] = useState(false);
 
   // Pagination and sorting states
-  const [userPagination, setUserPagination] = useState({ current: 1, pageSize: 20, total: 0 });
+  const [userPagination, setUserPagination] = useState({ current: 1, pageSize: 50, total: 0 });
   const [userSort, setUserSort] = useState({ field: 'created_at', order: 'desc' });
 
   // Modal states
@@ -227,13 +227,13 @@ const UserTab: React.FC = () => {
           pageSize: userPagination.pageSize,
           total: userPagination.total,
           showSizeChanger: true,
-          pageSizeOptions: ['20', '30', '50'],
+          pageSizeOptions: ['20', '30', '50', '100'],
           showTotal: (total) => `共 ${total} 个用户`,
         }}
         onChange={(pagination, _filters, sorter) => {
           const s = Array.isArray(sorter) ? sorter[0] : sorter;
           const newPage = pagination.current || 1;
-          const newPageSize = pagination.pageSize || 20;
+          const newPageSize = pagination.pageSize || 50;
           const newSortField = (s?.field as string) || 'created_at';
           const newSortOrder = s?.order === 'ascend' ? 'asc' : 'desc';
           setUserPagination(prev => ({ ...prev, current: newPage, pageSize: newPageSize }));
