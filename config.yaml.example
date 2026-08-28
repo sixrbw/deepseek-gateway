@@ -142,6 +142,7 @@ logs:
   log_payloads: false     # 是否记录完整的请求和响应内容（会导致日志文件很大）
   raw_dumps: "none" # 是否记录协议转换过程中的原始流量 payload ("none", "error", "full")。默认 none。error 表示仅在出现 400 级别错误时落盘， full 表示全部落盘。
   payload_retention_days: 7 # 完整请求/响应 payload 的保留天数（默认 7 天）。元数据（用量统计、路径、状态码等）会长期保留。超过此天数的 payload 将被自动清理。
+  export_max_rows: 200000   # 单次 CSV 导出最大行数，超过将拒绝导出，避免内存占用过高
 
 # 前端配置
 frontend:

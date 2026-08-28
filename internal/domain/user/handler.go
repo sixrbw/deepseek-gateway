@@ -38,9 +38,9 @@ type RefinedServerConfigJSON struct {
 }
 
 type RefinedSystemConfigJSON struct {
-	Server       RefinedServerConfigJSON    `json:"server" binding:"required"`
-	Frontend     config.FrontendConfig      `json:"frontend" binding:"required"`
-	ClientFilter config.ClientFilterConfig  `json:"client_filter"`
+	Server       RefinedServerConfigJSON   `json:"server" binding:"required"`
+	Frontend     config.FrontendConfig     `json:"frontend" binding:"required"`
+	ClientFilter config.ClientFilterConfig `json:"client_filter"`
 }
 
 type QuotaService interface {
@@ -58,9 +58,17 @@ type UsageService interface {
 	GetAllRecentAccess(limit int) []usage.AccessLog
 	GetAccessLogsByDateRange(userID string, start, end time.Time, withPayload bool) []usage.AccessLog
 	GetAllAccessLogsByDateRange(start, end time.Time, withPayload bool) []usage.AccessLog
+	GetAccessLogsByDateRangeLimited(userID string, start, end time.Time, withPayload bool, limit int) []usage.AccessLog
+	GetAllAccessLogsByDateRangeLimited(start, end time.Time, withPayload bool, limit int) []usage.AccessLog
 	CleanupOldPayloads(retentionDays int) (int64, error)
 	GetAccessLogsByDates(dates []string, userID string, fn func(usage.AccessLog) error) error
 }
+
+const (
+	defaultAdminPageSize = 50
+	maxAdminPageSize     = 500
+	defaultExportMaxRows = 200000
+)
 
 type Cache interface {
 	DeleteUser(userID string)
@@ -264,13 +272,13 @@ func (h *Handler) Profile(c *gin.Context) {
 func (h *Handler) List(c *gin.Context) {
 	// 分页参数
 	page := 1
-	pageSize := 20
+	pageSize := defaultAdminPageSize
 	if p, err := strconv.Atoi(c.DefaultQuery("page", "1")); err == nil && p > 0 {
 		page = p
 	}
-	if ps, err := strconv.Atoi(c.DefaultQuery("page_size", "20")); err == nil && ps > 0 {
-		if ps > 1000 {
-			pageSize = 1000
+	if ps, err := strconv.Atoi(c.DefaultQuery("page_size", strconv.Itoa(defaultAdminPageSize))); err == nil && ps > 0 {
+		if ps > maxAdminPageSize {
+			pageSize = maxAdminPageSize
 		} else {
 			pageSize = ps
 		}
@@ -549,8 +557,6 @@ func (h *Handler) GetFrontendConfig(c *gin.Context) {
 		},
 	})
 }
-
-
 
 // ========== SSO 相关接口 ==========
 
@@ -859,28 +865,18 @@ func sanitizeFilename(name string) string {
 // 支持多日期选择：?dates=2026-01-01,2026-01-02,2026-01-03
 // 7 天内的记录包含完整 payload，超过 7 天的记录仅导出元数据
 func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
-	var logs []usage.AccessLog
-
-	// 支持多日期模式：?dates=2026-08-20,2026-08-21
-	if datesStr := c.Query("dates"); datesStr != "" {
-		dateStrs := strings.Split(datesStr, ",")
-		for _, ds := range dateStrs {
-			ds = strings.TrimSpace(ds)
-			t, err := time.ParseInLocation("2006-01-02", ds, time.UTC)
-			if err != nil {
-				continue
-			}
-			dayLogs := h.usageService.GetAllAccessLogsByDateRange(t, t.AddDate(0, 0, 1), true)
-			logs = append(logs, dayLogs...)
-		}
-	} else {
-		// 日期范围模式或全量
-		startDate, endDate, hasRange := parseDateRange(c)
-		if hasRange {
-			logs = h.usageService.GetAllAccessLogsByDateRange(startDate, endDate, true)
-		} else {
-			logs = h.usageService.GetAllAccessLogsByDateRange(time.Time{}, time.Time{}, true)
-		}
+	startDate, endDate, hasRange := parseDateRange(c)
+	if !hasRange {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date range is required: start/end or start_date/end_date"})
+		return
+	}
+	exportMaxRows := h.getExportMaxRows()
+	logs := h.usageService.GetAllAccessLogsByDateRangeLimited(startDate, endDate, true, exportMaxRows+1)
+	if len(logs) > exportMaxRows {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": fmt.Sprintf("export exceeds maximum rows (%d), please narrow the date range", exportMaxRows),
+		})
+		return
 	}
 
 	// 以 APIKey 前缀（有则用前缀，无则用 ID，否则归 unknown_token）为 key 分组
@@ -966,58 +962,98 @@ func (h *Handler) ExportAccessLogsByToken(c *gin.Context) {
 	}
 }
 
-// parseDateRange 解析 ?start_date=YYYY-MM-DD&end_date=YYYY-MM-DD 参数
-// 返回的 endDate 是 end_date 当天的次日（即包含整个 end_date 当天）
+// parseDateRange 解析导出日期范围参数
+// 支持：start/end、start_time/end_time、start_date/end_date
+// 返回的 endDate 是对应 end 参数当天的次日（即包含整个 end 当天）
 func parseDateRange(c *gin.Context) (start, end time.Time, ok bool) {
-	startStr := c.Query("start_date")
-	endStr := c.Query("end_date")
+	startStr := firstNonEmpty(
+		c.Query("start"),
+		c.Query("start_time"),
+		c.Query("start_date"),
+	)
+	endStr := firstNonEmpty(
+		c.Query("end"),
+		c.Query("end_time"),
+		c.Query("end_date"),
+	)
 	if startStr == "" && endStr == "" {
 		return time.Time{}, time.Time{}, false
 	}
 	var err error
 	if startStr != "" {
-		start, err = time.ParseInLocation("2006-01-02", startStr, time.UTC)
+		start, err = parseDateOrTime(startStr)
 		if err != nil {
 			return time.Time{}, time.Time{}, false
 		}
 	}
 	if endStr != "" {
-		end, err = time.ParseInLocation("2006-01-02", endStr, time.UTC)
+		end, err = parseDateOrTime(endStr)
 		if err != nil {
 			return time.Time{}, time.Time{}, false
 		}
-		end = end.AddDate(0, 0, 1) // 包含整个 end_date 当天
+		if !strings.Contains(endStr, "T") && !strings.Contains(endStr, " ") {
+			end = end.AddDate(0, 0, 1) // 纯日期参数时，包含整个 end 当天
+		}
 	} else {
 		end = time.Now().UTC().AddDate(0, 0, 1)
 	}
 	return start, end, true
 }
 
-// ExportAccessLogsByDates 按多个日期导出访问日志为 CSV（流式）
-// 查询参数：
-//   dates   - 逗号分隔的日期列表，格式 YYYY-MM-DD，例如 2026-08-20,2026-08-21
-//   user_id - (可选) 过滤特定用户
-func (h *Handler) ExportAccessLogsByDates(c *gin.Context) {
-	datesParam := c.Query("dates")
-	if datesParam == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "dates parameter is required (comma-separated YYYY-MM-DD)"})
-		return
+func parseDateOrTime(value string) (time.Time, error) {
+	if t, err := time.ParseInLocation("2006-01-02", value, time.UTC); err == nil {
+		return t, nil
 	}
+	if t, err := time.Parse(time.RFC3339, value); err == nil {
+		return t.UTC(), nil
+	}
+	if t, err := time.ParseInLocation("2006-01-02 15:04:05", value, time.UTC); err == nil {
+		return t, nil
+	}
+	return time.Time{}, fmt.Errorf("invalid date/time format")
+}
 
-	rawDates := strings.Split(datesParam, ",")
-	var validDates []string
-	for _, d := range rawDates {
-		d = strings.TrimSpace(d)
-		if _, err := time.Parse("2006-01-02", d); err == nil {
-			validDates = append(validDates, d)
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
 		}
 	}
-	if len(validDates) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "no valid dates provided; use YYYY-MM-DD format"})
+	return ""
+}
+
+func (h *Handler) getExportMaxRows() int {
+	if h.cm == nil || h.cm.GetConfig() == nil {
+		return defaultExportMaxRows
+	}
+	v := h.cm.GetConfig().Logs.ExportMaxRows
+	if v <= 0 {
+		return defaultExportMaxRows
+	}
+	return v
+}
+
+// ExportAccessLogsByDates 导出日期范围内访问日志为 CSV
+// 查询参数：
+//
+//	start/start_date/start_time - 开始时间
+//	end/end_date/end_time       - 结束时间
+//	user_id                     - (可选) 过滤特定用户
+func (h *Handler) ExportAccessLogsByDates(c *gin.Context) {
+	startDate, endDate, hasRange := parseDateRange(c)
+	if !hasRange {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "date range is required: start/end or start_date/end_date"})
 		return
 	}
-
 	userIDParam := c.Query("user_id")
+	exportMaxRows := h.getExportMaxRows()
+	logs := h.usageService.GetAccessLogsByDateRangeLimited(userIDParam, startDate, endDate, true, exportMaxRows+1)
+	if len(logs) > exportMaxRows {
+		c.JSON(http.StatusRequestEntityTooLarge, gin.H{
+			"error": fmt.Sprintf("export exceeds maximum rows (%d), please narrow the date range", exportMaxRows),
+		})
+		return
+	}
 
 	filename := fmt.Sprintf("access-logs-%s.csv", time.Now().Format("20060102-150405"))
 	c.Header("Content-Type", "text/csv; charset=utf-8")
@@ -1038,7 +1074,7 @@ func (h *Handler) ExportAccessLogsByDates(c *gin.Context) {
 	})
 	cw.Flush()
 
-	_ = h.usageService.GetAccessLogsByDates(validDates, userIDParam, func(l usage.AccessLog) error {
+	for _, l := range logs {
 		reqHeaders := ""
 		if len(l.RequestHeaders) > 0 {
 			if b, err := json.Marshal(l.RequestHeaders); err == nil {
@@ -1077,7 +1113,6 @@ func (h *Handler) ExportAccessLogsByDates(c *gin.Context) {
 			l.ResponseBody,
 			payloadExpired,
 		})
-		cw.Flush()
-		return nil
-	})
+	}
+	cw.Flush()
 }
