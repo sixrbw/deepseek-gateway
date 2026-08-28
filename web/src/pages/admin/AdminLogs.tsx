@@ -13,12 +13,18 @@ const AdminLogs: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportRange, setExportRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
+  const [viewRange, setViewRange] = useState<[Dayjs | null, Dayjs | null] | null>(null);
 
-  const fetchData = async () => {
+  const fetchData = async (range?: [Dayjs | null, Dayjs | null] | null) => {
+    const activeRange = range !== undefined ? range : viewRange;
+    let logsUrl = '/api/v1/admin/access-logs?detailed=true&limit=1000';
+    if (activeRange && activeRange[0] && activeRange[1]) {
+      logsUrl += `&start_date=${activeRange[0].format('YYYY-MM-DD')}&end_date=${activeRange[1].format('YYYY-MM-DD')}`;
+    }
     setLoading(true);
     try {
       const [logsResult, usersResult] = await Promise.allSettled([
-        api.get('/api/v1/admin/access-logs?detailed=true&limit=50'),
+        api.get(logsUrl),
         api.get('/api/v1/admin/users?page_size=1000'),
       ]);
       if (logsResult.status === 'fulfilled') {
@@ -83,7 +89,20 @@ const AdminLogs: React.FC = () => {
 
   return (
     <>
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 8 }}>
+      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <Space size="small">
+          <span>查看日期范围：</span>
+          <RangePicker
+            value={viewRange}
+            onChange={(val) => {
+              const newRange = val as [Dayjs | null, Dayjs | null] | null;
+              setViewRange(newRange);
+              fetchData(newRange);
+            }}
+            format="YYYY-MM-DD"
+            allowClear
+          />
+        </Space>
         <Space size="small">
           <span>导出日期范围：</span>
           <RangePicker
@@ -101,7 +120,7 @@ const AdminLogs: React.FC = () => {
           >
             导出（按 Token）
           </Button>
-          <Button icon={<SyncOutlined />} onClick={fetchData} loading={loading}>
+          <Button icon={<SyncOutlined />} onClick={() => fetchData()} loading={loading}>
             刷新
           </Button>
         </Space>
