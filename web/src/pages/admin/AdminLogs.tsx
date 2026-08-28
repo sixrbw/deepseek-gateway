@@ -17,14 +17,24 @@ const AdminLogs: React.FC = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [logsRes, usersRes] = await Promise.all([
+      const [logsResult, usersResult] = await Promise.allSettled([
         api.get('/api/v1/admin/access-logs?detailed=true&limit=50'),
-        api.get('/api/v1/admin/users?page_size=1000') // Fetch a large enough page to get all users roughly
+        api.get('/api/v1/admin/users?page_size=1000'),
       ]);
-      setAccessLogs(logsRes.data.data || []);
-      setUsers(usersRes.data.data || []);
+      if (logsResult.status === 'fulfilled') {
+        setAccessLogs(logsResult.value.data.data || []);
+      } else {
+        console.error('Failed to fetch access logs:', logsResult.reason);
+        message.error('获取访问日志失败，请刷新重试');
+      }
+      if (usersResult.status === 'fulfilled') {
+        setUsers(usersResult.value.data.data || []);
+      } else {
+        console.error('Failed to fetch users:', usersResult.reason);
+      }
     } catch (err) {
       console.error('Failed to fetch admin access logs:', err);
+      message.error('加载数据失败，请刷新重试');
     } finally {
       setLoading(false);
     }
